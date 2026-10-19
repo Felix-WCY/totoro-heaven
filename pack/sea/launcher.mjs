@@ -7,7 +7,43 @@ import { exec } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import * as tar from 'tar'
 
-const RUNTIME_DIR = path.join(os.tmpdir(), 'totoro-heaven-runtime')
+/**
+ * 运行目录（把 .output 解包到这里再跑）—— **2026-10-19 修复：不再写死单一路径**。
+ *
+ * 实测故障：有些机器上 `%TEMP%` 对程序**不可写**（EPERM）。杀毒软件过滤驱动、Windows
+ * 「受控文件夹访问」、企业策略、沙箱都能造成。原先写死 `%TEMP%/totoro-heaven-runtime`，
+ * 一旦写不进去就**在解包阶段直接抛异常**——用户只看到窗口一闪而过 + 一行报错。
+ *
+ * 现在按优先级探测**可写**的候选目录（真写一个探针文件再删，不靠猜），第一个不行就换下一个。
+ */
+const RUNTIME_DIR_CANDIDATES = [
+  path.join(os.tmpdir(), 'totoro-heaven-runtime'),
+  ...(process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, 'totoro-heaven', 'runtime')] : []),
+  path.join(path.dirname(process.execPath), 'runtime'),
+  path.join(os.homedir(), '.totoro-heaven', 'runtime'),
+]
+
+/** 实际使用的运行目录（`main()` 里探测后赋值） */
+let RUNTIME_DIR = ''
+
+/**
+ * 探测「可写」的运行目录：真的写一个探针文件再删掉，**不靠猜**。
+ * @returns 第一个可写的目录；全部不可写时返回 `null`
+ */
+function pickRuntimeDir() {
+  for (const dir of RUNTIME_DIR_CANDIDATES) {
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      const probe = path.join(dir, `.write-probe-${process.pid}`)
+      fs.writeFileSync(probe, 'ok')
+      fs.rmSync(probe, { force: true })
+      return dir
+    } catch {
+      // 这个候选不可写（EPERM / 只读 / 受控文件夹）⇒ 试下一个；全部失败时由调用方给出明确提示
+    }
+  }
+  return null
+}
 /**
  * 期望端口（可用环境变量覆盖）。**实际端口在运行时才定**：
  * 若它被占用，会自动顺延到下一个可用端口（见 `pickPort`），
@@ -254,6 +290,23 @@ async function main() {
   process.env.PORT = String(PORT)
   // ② 横幅要显示**实际**端口，所以放到定端口之后再打印
   console.log(banner())
+  /**
+   * ③ 探测可写运行目录（2026-10-19 修复）：`%TEMP%` 不可写时自动换到 LOCALAPPDATA / EXE 同级 / 主目录。
+   *    全部不可写时给出**能照做的**提示，而不是抛一段堆栈让用户看不懂、窗口一闪而过。
+   */
+  const runtimeDir = pickRuntimeDir()
+  if (!runtimeDir) {
+    console.error('')
+    console.error('启动失败：找不到可写的运行目录。已依次尝试：')
+    for (const d of RUNTIME_DIR_CANDIDATES) console.error('  - ' + d)
+    console.error('')
+    console.error('常见原因：杀毒软件拦截、Windows「受控文件夹访问」、或该目录为只读。')
+    console.error('处理办法：把本程序所在文件夹加入杀毒软件白名单，或右键「以管理员身份运行」。')
+    console.error('')
+    exec('pause')
+    process.exit(1)
+  }
+  RUNTIME_DIR = runtimeDir
   await extractAssets()
   const entry = path.join(RUNTIME_DIR, 'server', 'index.mjs')
   console.log(`Server assets ready at ${RUNTIME_DIR}`)
