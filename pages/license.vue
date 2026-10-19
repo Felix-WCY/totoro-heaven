@@ -125,7 +125,41 @@
       </v-card-text>
     </v-card>
 
-    <!-- ③ 激活 -->
+    <!-- ③ 卡密激活（买家从店铺拿到的卡密 —— 最常见路径） -->
+    <v-card class="mb-4">
+      <v-card-title class="d-flex align-center">
+        <v-icon class="mr-1">mdi-ticket-confirmation-outline</v-icon>
+        <span class="text-h6">输入卡密激活</span>
+      </v-card-title>
+      <v-card-text>
+        <div class="text-body-2 mb-2">
+          在店铺下单后你会收到一张<b>卡密</b>（形如 TH-ABCD-EFGH）。填在下面，程序会自动联网换成本机可用的授权。
+        </div>
+        <v-text-field
+          v-model="cardCode"
+          label="卡密"
+          placeholder="TH-ABCD-EFGH"
+          variant="outlined"
+          density="comfortable"
+          hide-details
+          class="card-code"
+          @keyup.enter="doActivateCard"
+        />
+
+        <v-alert v-if="cardError" type="error" variant="tonal" density="comfortable" class="mt-3">
+          {{ cardError }}
+        </v-alert>
+
+        <div class="d-flex flex-wrap ga-2 mt-3">
+          <v-btn color="primary" variant="flat" prepend-icon="mdi-cloud-download-outline" :loading="busy" @click="doActivateCard">
+            卡密激活
+          </v-btn>
+          <v-btn variant="text" :disabled="!cardCode" @click="cardCode = ''">清空</v-btn>
+        </div>
+      </v-card-text>
+    </v-card>
+
+    <!-- ④ 手动粘贴证书（发布者直接把证书发给你时用） -->
     <v-card class="mb-4">
       <v-card-title class="d-flex align-center">
         <v-icon class="mr-1">mdi-key-variant</v-icon>
@@ -166,7 +200,7 @@
       </div>
       <ul class="text-body-2 pl-4 mt-1">
         <li>证书采用<b>非对称签名</b>校验：本程序只内置<b>公钥</b>，私钥始终在发布者本机，因此<b>无法伪造</b>证书；</li>
-        <li>校验完全在<b>本机</b>完成（不联网），激活一次后即可<b>离线使用</b>；正常到期后还有一段离线宽限期；</li>
+        <li>卡密激活需要<b>联网一次</b>（向激活服务器换取本机证书）；激活完成后即可<b>离线使用</b>，正常到期后还有一段离线宽限期；</li>
         <li>请勿转发证书或公开分享本软件：证书与本机机器码绑定，转发到别的机器上<b>用不了</b>，只会白费功夫。</li>
       </ul>
     </v-alert>
@@ -201,6 +235,9 @@ const { status, ui, loading, refresh: refreshState, applyStatus } = useLicenseSt
 const certificate = ref('')
 const busy = ref(false)
 const errorText = ref('')
+/** 卡密（在线激活用）。与「粘贴证书」是两条并列的路，各自独立的错误提示，互不覆盖 */
+const cardCode = ref('')
+const cardError = ref('')
 
 /** 是否是从别的页面被路由守卫拦过来的（`?need=1`） */
 const blockedHere = computed(() => route.query.need === '1')
@@ -272,6 +309,38 @@ const doActivate = async (): Promise<void> => {
   }
 }
 
+/**
+ * 卡密激活：本机把「卡密 + 机器码」发给激活服务，服务端用私钥现签一张**绑定本机**的证书回来。
+ *
+ * ⚠️ 服务端返回的证书仍然走**本地验签**（`activateLicense`）—— 服务端说"成功"不算数。
+ *    这样即使激活地址被改到一个伪造服务器，对方也签不出能通过校验的证书（他没有私钥）。
+ */
+const doActivateCard = async (): Promise<void> => {
+  if (!cardCode.value.trim()) {
+    cardError.value = '请先填写卡密'
+    return
+  }
+  busy.value = true
+  cardError.value = ''
+  try {
+    const res = await $fetch<{ ok: boolean; error: string; status: LicenseStatusView }>(
+      '/api/local/license/activate-card',
+      { method: 'POST', body: { card: cardCode.value } },
+    )
+    applyStatus(res.status)
+    if (res.ok) {
+      cardCode.value = ''
+      showSnackbar('卡密激活成功', 'success')
+    } else {
+      cardError.value = res.error
+    }
+  } catch (e) {
+    cardError.value = `激活请求失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    busy.value = false
+  }
+}
+
 const doDeactivate = async (): Promise<void> => {
   busy.value = true
   try {
@@ -291,6 +360,12 @@ useHead({ title: '授权 · 龙猫天堂' })
 </script>
 
 <style scoped>
+/* 卡密用等宽字体 + 字距：用户要照着输入或核对，等宽更好认 */
+.card-code :deep(input) {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
 /* 机器码用等宽字体 + 大字距：用户要一个字符一个字符念给发布者，必须好认 */
 .machine-code {
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;

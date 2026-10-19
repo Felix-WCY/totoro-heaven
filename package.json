@@ -17,7 +17,8 @@
     "selftest:wiring": "node scripts/selftest-check-wiring.mjs",
     "verify": "npm run test:mp && npm run typecheck:mp && npm run typecheck:ui && npm run typecheck:vue && npm run check:wiring && npm run selftest:wiring",
     "sea": "powershell -NoProfile -ExecutionPolicy Bypass -File pack/sea/build-sea.ps1",
-    "build:issuer": "node tools/license-issuer/build-issuer.mjs"
+    "build:issuer": "node tools/license-issuer/build-issuer.mjs",
+    "activation": "node tools/activation-server/server.mjs"
   },
   "dependencies": {
     "ky": "^1.2.3",
