@@ -39,7 +39,51 @@
 
 ---
 
-## 2. 部署（以 Linux 服务器为例）
+## 1.5 最快部署（用脚本，别手打命令）
+
+### 租什么
+
+| 项目 | 建议 |
+| --- | --- |
+| 厂商 | 阿里云 / 腾讯云轻量应用服务器（都行） |
+| 配置 | **最低配就够**（1 核 1G，够几万次激活） |
+| 系统 | Ubuntu 22.04 或 Debian 12（Linux 最省事）；也可用 Windows Server |
+| 必须 | **带公网 IP** |
+| 不需要 | 域名、HTTPS 证书（先用 `http://公网IP:8787` 就能跑起来） |
+| 成本 | 约 ¥30~60/月 |
+
+### Linux（Ubuntu / Debian）
+
+把 `server.mjs` 和 `license-private.pem` 上传到服务器同一目录，然后：
+
+```bash
+sudo bash install-ubuntu.sh
+```
+
+脚本会自动完成：装 Node（如缺）→ 建目录 → 私钥 `chmod 600` →
+配置 systemd **开机自启** → 生成管理密钥 → 自检 → 打印对外地址和发卡命令。
+
+### Windows 服务器
+
+1. 装 [Node.js LTS](https://nodejs.org/zh-cn/download)（一路下一步）
+2. 把 `server.mjs`、`license-private.pem`、`run-windows.ps1` 放同一目录
+3. 右键 `run-windows.ps1` →「使用 PowerShell 运行」
+
+脚本会检查 Node 与私钥、生成/复用管理密钥、自动放行本机防火墙、打印访问信息。
+
+### ⚠️ 部署完必须做的两件事
+
+**① 云控制台「安全组」放行 TCP `8787`** —— 不放行，外面永远连不上（这一步最容易忘）。
+
+**② 在你自己的电脑上验证**：
+
+```bash
+curl http://<公网IP>:8787/health
+```
+
+必须看到 `"keyLoaded":true`。若是 `false`，说明私钥没被读到，签出来的证书全是废的。
+
+## 2. 部署（手工步骤，脚本不好使时看这里）
 
 ### 2.1 上传两样东西
 
