@@ -307,6 +307,14 @@ async function main() {
     process.exit(1)
   }
   RUNTIME_DIR = runtimeDir
+  /**
+   * 🆕 2026-10-19：把「授权数据**可写**目录」也告诉服务端（`server/utils/license/instance.ts` 会读它）。
+   * 背景：有些机器上 `%LOCALAPPDATA%` 与 `%TEMP%` **都不可写**（EPERM），那时授权文件必须落到
+   * EXE 旁边 —— 这里用运行目录的**上一级**再加 `totoro-heaven-data`（EXE 版通常就是 exe 所在目录）。
+   * ⚠️ **不要**改写成 `TOTORO_LICENSE_DIR`：那是"显式覆盖"，会让实例 ID 换位置 ⇒ 机器码变化 ⇒ 已发证书作废。
+   */
+  process.env.TOTORO_DATA_DIR =
+    process.env.TOTORO_DATA_DIR || path.join(path.dirname(RUNTIME_DIR), 'totoro-heaven-data')
   await extractAssets()
   const entry = path.join(RUNTIME_DIR, 'server', 'index.mjs')
   console.log(`Server assets ready at ${RUNTIME_DIR}`)

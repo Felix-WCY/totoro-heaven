@@ -17,11 +17,20 @@
  * 生产构建（`npm run build` → 打包 EXE）里 `import.meta.dev === false` ⇒ **强制校验**。
  * 想在本机按生产口径自测，设 `TOTORO_LICENSE_STRICT=1` 即可强制开启校验。
  */
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { logInfo, logWarn } from '../logger'
 import { verifyCertificate } from './certificate'
 import type { LicenseCode, LicensePayload } from './certificate'
-import { LICENSE_DIR, LICENSE_FILE, getInstanceId, machineCode, machineFingerprint } from './instance'
+import {
+  displayLicenseDir,
+  existingLicenseFile,
+  getInstanceId,
+  machineCode,
+  machineFingerprint,
+  preferredLicenseFile,
+  removeLicenseFile,
+  writeLicenseFile,
+} from './instance'
 import { LICENSE_PUBLIC_KEY_PEM } from './publicKey'
 
 /**
@@ -109,8 +118,10 @@ let lastLoggedCode: LicenseStatusCode | null = null
 /** 读盘（坏文件/读失败一律当作"未激活"，**不抛异常**——授权状态坏了不该让整个程序起不来） */
 function readLicenseFile(): LicenseFileShape | null {
   try {
-    if (!existsSync(LICENSE_FILE)) return null
-    const parsed: unknown = JSON.parse(readFileSync(LICENSE_FILE, 'utf8'))
+    // 🆕 多候选目录：在**所有**候选里找已存在的授权文件（换过目录也能读到）
+    const file = existingLicenseFile()
+    if (!file) return null
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
     if (!parsed || typeof parsed !== 'object') return null
     const o = parsed as Partial<LicenseFileShape>
     if (typeof o.certificate !== 'string' || !o.certificate) return null
@@ -158,7 +169,7 @@ function buildStatus(input: StatusInput, activatedAt: string): LicenseStatus {
     expiresAt: payload?.exp ?? 0,
     graceUntil: payload?.grace ?? 0,
     activatedAt,
-    dir: LICENSE_DIR,
+    dir: displayLicenseDir(),
   }
 }
 
@@ -264,13 +275,19 @@ export function activateLicense(certificate: string): ActivateResult {
     machineCode: machineCode(),
     activatedAt: new Date().toISOString(),
   }
-  try {
-    if (!existsSync(LICENSE_DIR)) mkdirSync(LICENSE_DIR, { recursive: true })
-    writeFileSync(LICENSE_FILE, JSON.stringify(record, null, 2), 'utf8')
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    logWarn('license', '授权文件写入失败', { error: msg })
-    return { ok: false, status: getLicenseStatus(true), error: `授权文件写入失败（${LICENSE_DIR}）：${msg}` }
+  /**
+   * 🆕 多候选目录：写到**第一个可写**目录。
+   * `%LOCALAPPDATA%` 被拒（EPERM）时会自动换到 `%APPDATA%` / 程序目录 / 用户主目录 ——
+   * 这是实测故障（2026-10-19）的正解：原先只认一个目录，写不进去就永远激活不了。
+   */
+  const written = writeLicenseFile(JSON.stringify(record, null, 2))
+  if (!written.ok) {
+    logWarn('license', '授权文件写入失败', { error: written.error })
+    return {
+      ok: false,
+      status: getLicenseStatus(true),
+      error: `授权文件写入失败：${written.error}。请把程序所在文件夹加入杀毒软件白名单，或右键「以管理员身份运行」。`,
+    }
   }
   invalidate()
   lastLoggedCode = null
@@ -280,17 +297,16 @@ export function activateLicense(certificate: string): ActivateResult {
 
 /** 解绑：删掉本机授权文件（换机/重装前用得上）。找不到文件也算成功（幂等）。 */
 export function deactivateLicense(): LicenseStatus {
-  try {
-    if (existsSync(LICENSE_FILE)) unlinkSync(LICENSE_FILE)
-    logInfo('license', '已解绑本机授权')
-  } catch (err) {
-    // 删不掉（被占用/权限）：同样按警告留痕，随后 getLicenseStatus 会如实反映"仍然有证书"
-    logWarn('license', '解绑失败（授权文件删不掉）', { error: err instanceof Error ? err.message : String(err) })
-  }
+  // 🆕 多候选目录：删掉**任意候选里**已存在的授权文件
+  const had = existingLicenseFile() !== null
+  const removed = removeLicenseFile()
+  if (!had) logInfo('license', '解绑：本机本来就没有授权文件')
+  else if (removed) logInfo('license', '已解绑本机授权')
+  else logWarn('license', '解绑失败（授权文件删不掉）')
   invalidate()
   lastLoggedCode = null
   return getLicenseStatus(true)
 }
 
-/** 供诊断/单测：授权的落盘路径 */
-export const licenseFilePath = (): string => LICENSE_FILE
+/** 供诊断/单测：授权文件的落盘路径 */
+export const licenseFilePath = (): string => preferredLicenseFile()
