@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { LICENSE_DIR_CANDIDATES } from './instance'
 
 /** 正式发布时把部署好的激活服务地址填在这里（例如 `https://activate.example.com`） */
-export const ACTIVATION_URL_BUILTIN = ''
+export const ACTIVATION_URL_BUILTIN = 'https://totoro-license.pages.dev'
 
 /** 允许在数据目录里放一个文件临时指定地址（省掉一次重新打包） */
 const URL_FILE_NAME = 'activation-url.txt'
