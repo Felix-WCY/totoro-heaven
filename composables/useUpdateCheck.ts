@@ -15,7 +15,14 @@ import { isNewerVersion } from '~/utils/mp/version'
  * 而是读 `app.config.ts` 的 `updateRepo`（唯一一处要改的地方）。
  * 这里只留一个兜底值，防止漏配时整个提示条挂掉。
  */
-const DEFAULT_REPO = '1hao-ui/totoro-heaven'
+/**
+ * 兜底仓库名。
+ *
+ * **刻意留空**：商用分发包不指向任何 GitHub 仓库。
+ * 之前这里是 `1hao-ui/totoro-heaven`，配合下面 `||` 的写法会让
+ * `app.config.ts` 里留空也照样去查 GitHub —— 买家点「检查更新」就能看到源码仓库。
+ */
+const DEFAULT_REPO = ''
 export const releasesUrlOf = (repo: string) => `https://github.com/${repo}/releases/latest`
 export const repoUrlOf = (repo: string) => `https://github.com/${repo}`
 const CACHE_KEY = 'totoro_update_check_v1'
@@ -52,6 +59,16 @@ const CANNOT_CONNECT_HINT =
 
 async function runCheck(currentVersion: string, repo: string, opts: { force?: boolean } = {}): Promise<void> {
   if (!import.meta.client) return
+  /**
+   * **未配置仓库 ⇒ 关闭更新检查**（`app.config.ts` 的 `updateRepo` 留空即启用这条）。
+   *
+   * 商用分发包**不指向任何 GitHub 仓库**，理由有两条：
+   * ① 买家点「检查更新」会顺着链接看到源码仓库，没必要让他知道；
+   * ② 国内网络访问 `api.github.com` 不稳，会反复弹「无法连接 GitHub」，反而像坏了。
+   *
+   * 这里**不改任何 state**（不置 error、不置 hasUpdate）⇒ 界面安静地什么都不显示。
+   */
+  if (!repo) return
   if (inflight) return inflight // 并发去重：同时只跑一次
   if (!opts.force && started) return // 自动检查每次会话只做一次；手动（force）随时可跑
   state.checking = true
@@ -165,8 +182,11 @@ function dismissUpdate(): void {
 export function useUpdateCheck() {
   const appConfig = useAppConfig()
   const appVersion = computed(() => String(appConfig.version || 'dev'))
-  /** 要查哪个仓库：`app.config.ts` 的 `updateRepo`（空/漏配时用兜底值） */
-  const repo = computed(() => String((appConfig as { updateRepo?: string }).updateRepo || DEFAULT_REPO))
+  /**
+   * 要查哪个仓库：`app.config.ts` 的 `updateRepo`。
+   * ⚠️ 用 `??` 而**不是** `||`：`||` 会把"显式留空（关闭更新检查）"当成"没配"而回退到兜底仓库。
+   */
+  const repo = computed(() => String((appConfig as { updateRepo?: string }).updateRepo ?? DEFAULT_REPO).trim())
   return {
     ...toRefs(state),
     appVersion,

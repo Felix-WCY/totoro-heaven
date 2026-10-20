@@ -217,15 +217,12 @@ const demoActive = demo.demoMode
 const realData = useMpReal()
 const gate = realData.gateStatus
 
-/** 导出完成后的提示语（用户要把它连同 zip 一起发出来，所以写全） */
-const SUPPORT_EMAIL = 'dboycht@qq.com'
-
 /** 操作说明（**按顺序、可照做**；用户明确要求把它写清楚） */
 const STEPS = [
   '点下面的「开始记录」（点完它会一直记着：你在哪个页面、点了什么；中途切到别的页面不会中断记录）。',
   '按顺序复现问题。例：工作台点「读取真实账号与任务」→ 进「跑步」看线路下拉里有没有线路 → 进「跑道编辑」描一条并保存 → 回到「跑步」再点「真实提交」。',
   '回到本页点「结束并导出」，浏览器会下载一个 zip。',
-  `把下载到的 zip 发到 ${SUPPORT_EMAIL}，附一句你遇到的症状（例如：研究生院看不到线路可选）。`,
+  '把下载到的 zip 发给客服，附一句你遇到的症状（例如：研究生院看不到线路可选）。',
 ]
 
 // ---- 记录状态（🆕 2026-09-22：**服务端锚定的记录窗口**） ----
@@ -1409,7 +1406,7 @@ const finishAndExport = async () => {
      * 界面因此显示"上次记录已结束 · 可导出"；要重新记录就点「开始记录」（会覆盖它）。
      */
     startTimer() // 已结束 ⇒ 内部直接返回，不走来秒
-    showSnackbar(`已导出 ${name}（约 ${Math.max(1, Math.round(blob.size / 1024))} KB）—— 请发到 ${SUPPORT_EMAIL}`, 'success', { timeout: 8000 })
+    showSnackbar(`已导出 ${name}（约 ${Math.max(1, Math.round(blob.size / 1024))} KB）—— 请发给客服`, 'success', { timeout: 8000 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     exportError.value = /abort|timeout/i.test(msg)
