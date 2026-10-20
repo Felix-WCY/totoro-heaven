@@ -102,30 +102,7 @@
       </v-card-text>
     </v-card>
 
-    <!-- ② 机器码 -->
-    <v-card class="mb-4">
-      <v-card-title class="d-flex align-center">
-        <v-icon class="mr-1">mdi-fingerprint</v-icon>
-        <span class="text-h6">本机机器码</span>
-      </v-card-title>
-      <v-card-text>
-        <div class="text-body-2 mb-2">
-          把下面这串<b>发给发布者</b>，发布者会据此为你签发一张<b>专属授权证书</b>。
-          它<b>与本机绑定</b>：换一台机器就不通用，所以每台机器都要单独签发。
-        </div>
-        <div class="d-flex align-center flex-wrap ga-2">
-          <code class="machine-code">{{ textOr(status.machineCode) }}</code>
-          <v-btn variant="tonal" size="small" prepend-icon="mdi-content-copy" @click="copyMachineCode">
-            复制机器码
-          </v-btn>
-        </div>
-        <div class="text-caption text-medium-emphasis mt-2">
-          数据目录：<code>{{ textOr(status.dir) }}</code>
-        </div>
-      </v-card-text>
-    </v-card>
-
-    <!-- ③ 卡密激活（买家从店铺拿到的卡密 —— 最常见路径） -->
+    <!-- ② 卡密激活（买家从店铺拿到的卡密 —— 最常见路径，所以放最前面） -->
     <v-card class="mb-4">
       <v-card-title class="d-flex align-center">
         <v-icon class="mr-1">mdi-ticket-confirmation-outline</v-icon>
@@ -164,27 +141,45 @@
       {{ errorText }}
     </v-alert>
 
-    <!-- ④ 手动粘贴证书（备用方式：发布者直接把证书发给你时用）
-         默认收起 —— 绝大多数买家拿到的是卡密，看到「粘贴授权证书」只会困惑「我是不是还得弄这个」 -->
+    <!-- ③ 手动激活（备用通道：没有卡密、或卡密一直激活不了时用）
+         默认收起 —— 绝大多数买家走卡密，这些内容对他们纯属干扰 -->
     <v-card class="mb-4">
       <v-card-text>
         <div class="d-flex align-center justify-space-between flex-wrap ga-2">
           <span class="text-body-2 text-medium-emphasis">
-            没有卡密？如果发布者直接发了一段授权证书给你，可以用那种方式激活。
+            没有卡密？或者卡密激活一直失败？可以走手动激活。
           </span>
           <v-btn
             variant="tonal"
             size="small"
-            :prepend-icon="showCertPanel ? 'mdi-chevron-up' : 'mdi-key-variant'"
+            :prepend-icon="showCertPanel ? 'mdi-chevron-up' : 'mdi-lifebuoy'"
             @click="showCertPanel = !showCertPanel"
           >
-            {{ showCertPanel ? '收起' : '改用授权证书激活' }}
+            {{ showCertPanel ? '收起' : '手动激活（选填）' }}
           </v-btn>
         </div>
 
         <div v-if="showCertPanel" class="mt-4">
+          <!-- 机器码：只有手动签发证书时才需要把它发给发布者 -->
           <div class="text-body-2 mb-2">
-            把发布者发给你的<b>整段证书</b>粘贴到下面 —— 换行、空格都会被自动忽略，不用担心复制多出空行。
+            需要<b>本机机器码</b>时，把它发给发布者，发布者会为你签发一张绑定本机的授权证书。
+            换一台机器要重新签发。
+          </div>
+          <div class="d-flex align-center flex-wrap ga-2">
+            <code class="machine-code">{{ textOr(status.machineCode) }}</code>
+            <v-btn variant="tonal" size="small" prepend-icon="mdi-content-copy" @click="copyMachineCode">
+              复制机器码
+            </v-btn>
+          </div>
+          <div class="text-caption text-medium-emphasis mt-2">
+            数据目录：<code>{{ textOr(status.dir) }}</code>
+          </div>
+
+          <v-divider class="my-4" />
+
+          <!-- 证书：发布者直接把证书发给你时用 -->
+          <div class="text-body-2 mb-2">
+            拿到证书后，把<b>整段证书</b>粘贴到下面 —— 换行、空格都会被自动忽略，不用担心复制多出空行。
           </div>
           <v-textarea
             v-model="certificate"
