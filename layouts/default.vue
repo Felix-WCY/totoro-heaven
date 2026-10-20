@@ -27,9 +27,6 @@
       <!-- 授权（2026-10-16 新增）：必须常驻可见 —— 未授权时整个软件不可用，
            用户要能一眼找到「授权」页去取机器码/粘贴证书；藏进二级菜单会让人无从下手。 -->
       <v-btn to="/license" variant="text" prepend-icon="mdi-key-variant" class="text-none">授权</v-btn>
-      <!-- 鸣谢（2026-09-25 用户要求接进正式软件）：以前只能按 `/credits` 直连访问，现在给一个顶栏入口。
-           页面本身是整屏的"片尾式"名单（彩带 + 缓慢滚动 / 放得下就全显），组件 `components/CreditsView.vue` 未改。 -->
-      <v-btn to="/credits" variant="text" prepend-icon="mdi-heart-outline" class="text-none">鸣谢</v-btn>
       <v-spacer />
 
       <!-- 授权状态（2026-10-19）：与「授权」页、全局路由守卫同源（useLicenseState）。

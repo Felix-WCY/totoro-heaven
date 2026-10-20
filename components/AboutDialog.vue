@@ -14,7 +14,6 @@
       <v-card-text>
         <v-list density="compact" class="pa-0">
           <v-list-item prepend-icon="mdi-tag-outline" title="版本" :subtitle="`v${version}`" />
-          <v-list-item prepend-icon="mdi-account-circle-outline" title="发布者" subtitle="龙猫天堂团队" />
         </v-list>
 
         <UpdateNotice compact />
