@@ -197,7 +197,7 @@ Invoke-RestMethod -Uri "$URL/admin/cards?limit=100" -Headers @{ Authorization = 
 
 ## 10. 时钟回拨防护
 
-客户端会记录「历史见过的最晚时间」（`last-seen.json`，与 `license.json` 同目录），
+客户端会记录「历史见过的最晚时间」（存在 `license.json` 里，带 HMAC 校验码），
 判定有效期时用 `max(当前时钟, 历史最大)`：
 
 - 把系统时间调回去 ⇒ 累计时间不倒退，到期照常触发；
