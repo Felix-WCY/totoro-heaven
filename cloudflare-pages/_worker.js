@@ -162,7 +162,7 @@ const memCounters = new Map()
  * 正常买家反而全部激活失败。所以：**失败计数走 Cache API（不占配额）**，
  * 只有"触发熔断"这一刻才写 KV —— 最多 1 次/小时。
  */
-const GLOBAL_FAIL_LIMIT = 30
+const GLOBAL_FAIL_LIMIT = 100
 const GLOBAL_BLOCK_TTL = 3600
 
 function clientIp(request) {
