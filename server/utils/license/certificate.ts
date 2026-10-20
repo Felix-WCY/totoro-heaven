@@ -60,6 +60,7 @@ export interface LicensePayload {
  * - `bad_signature`：签名对不上（篡改或伪造）
  * - `fingerprint_mismatch`：证书不是发给这台机器的
  * - `grace_expired`：连离线宽限都过了
+ * - `clock_rollback`：检测到系统时间被往回拨（由 `state.ts` 判定，见 `utils/mp/clockGuard.ts`）
  */
 export type LicenseCode =
   | 'ok'
@@ -68,6 +69,7 @@ export type LicenseCode =
   | 'bad_signature'
   | 'fingerprint_mismatch'
   | 'grace_expired'
+  | 'clock_rollback'
 
 export interface LicenseCheck {
   /** 是否放行 */
@@ -89,6 +91,7 @@ export const LICENSE_CODE_TEXT: Record<LicenseCode, string> = {
   bad_signature: '证书签名无效（内容被篡改，或不是本程序的供应商签发）',
   fingerprint_mismatch: '证书与本机机器码不匹配（这是发给另一台机器的证书）',
   grace_expired: '授权已过期（且已超出离线宽限期）',
+  clock_rollback: '检测到系统时间被调回（授权按累计使用时间判定）—— 请把系统时间校准到正确时间后重试',
 }
 
 /** base64url 字符集（严格校验：`Buffer.from` 对非法字符是**静默忽略**的，不先卡住会放过脏输入） */

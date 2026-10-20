@@ -19,7 +19,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { logInfo, logWarn } from '../logger'
-import { verifyCertificate } from './certificate'
+import { decodeCertificate, verifyCertificate } from './certificate'
 import type { LicenseCode, LicensePayload } from './certificate'
 import {
   displayLicenseDir,
@@ -28,9 +28,12 @@ import {
   machineCode,
   machineFingerprint,
   preferredLicenseFile,
+  readSidecar,
   removeLicenseFile,
   writeLicenseFile,
+  writeSidecar,
 } from './instance'
+import { checkClock, describeRollback, type ClockCheckResult } from '../../../utils/mp/clockGuard'
 import { LICENSE_PUBLIC_KEY_PEM } from './publicKey'
 
 /**
@@ -48,6 +51,7 @@ export const LICENSE_STATUS_TEXT: Record<LicenseStatusCode, string> = {
   bad_signature: '证书签名无效（内容被篡改，或不是本程序的供应商签发）',
   fingerprint_mismatch: '证书与本机机器码不匹配（这是发给另一台机器的证书）',
   grace_expired: '授权已过期（且已超出离线宽限期）',
+  clock_rollback: '检测到系统时间被调回（授权按累计使用时间判定）—— 请把系统时间校准到正确时间后重试',
 }
 
 /** 落盘结构（**不含任何秘密**：证书本身是签名产物，公开保存也无害） */
@@ -180,6 +184,29 @@ function buildStatus(input: StatusInput, activatedAt: string): LicenseStatus {
  * 那样界面会对着一个只是还没粘证书的用户说"你的证书格式不对"，把人引到完全错误的方向。
  * （本文件第一版正是这么写的，被 `tests/mp/licenseState.test.ts` 抓出来 ⇒ 现在显式给 `not_activated`。）
  */
+/** 时钟状态文件名：与 `license.json` 放同一批候选目录（删它就得连授权一起删） */
+const CLOCK_STATE_NAME = 'last-seen.json'
+
+/** 读「历史见过的最大时间」；没有/损坏都按 `0`（首次运行）处理，绝不抛异常 */
+function readClockState(): { lastSeenMs: number } {
+  const raw = readSidecar(CLOCK_STATE_NAME)
+  if (!raw) return { lastSeenMs: 0 }
+  try {
+    const parsed = JSON.parse(raw) as { at?: unknown }
+    const at = Number(parsed.at)
+    return { lastSeenMs: Number.isFinite(at) && at > 0 ? at : 0 }
+  } catch {
+    // 文件写坏了：当作首次运行（宁可少记一次，也不要让程序起不来）
+    return { lastSeenMs: 0 }
+  }
+}
+
+/** 需要时把累计时间写回（只增不减；写不进去不影响本次判定，只是下次少一层保护） */
+function persistClockState(result: ClockCheckResult): void {
+  if (!result.shouldPersist) return
+  writeSidecar(CLOCK_STATE_NAME, JSON.stringify({ at: result.effectiveNowMs, updatedAt: new Date().toISOString() }))
+}
+
 function computeStatus(): LicenseStatus {
   const file = readLicenseFile()
   let status: LicenseStatus
@@ -189,27 +216,52 @@ function computeStatus(): LicenseStatus {
       '',
     )
   } else {
-    const check = verifyCertificate(file.certificate, LICENSE_PUBLIC_KEY_PEM, { fingerprint: machineFingerprint() })
-    status = buildStatus(
-      {
-        code: check.code,
-        ok: check.ok,
-        degraded: check.ok && check.degraded,
-        message: check.ok
-          ? check.degraded
-            ? '授权已到期但在离线宽限期内，请尽快续期'
-            : LICENSE_STATUS_TEXT.ok
-          : check.message,
-        payload: check.payload,
-      },
-      file.activatedAt,
-    )
     /**
-     * 证书里的机器码与"激活时记录的机器码"不一致 ⇒ 说明用户在**别的机器上激活过之后把文件搬过来了**。
-     * 这种情况 `verifyCertificate` 会以 `fingerprint_mismatch` 拒掉，这里只补一条更好排查的日志。
+     * **时钟回拨检测**（2026-10-20 补的洞）：
+     * 到期判断用的是买家**本地时钟** —— 把系统时间调回购买那天，证书就永远不过期。
+     * 两道防线：① 回拨超过 24 小时 ⇒ 判定为改时间，强制拒用；
+     *          ② 判定有效期用 `max(当前, 历史最大)` ⇒ 累计时间只增不减，调回去白搭。
      */
-    if (!check.ok && file.machineCode && file.machineCode !== status.machineCode) {
-      logWarn('license', '授权文件的激活机器码与本机不一致', { from: file.machineCode, now: status.machineCode })
+    const clockCheck = checkClock({ nowMs: Date.now(), lastSeenMs: readClockState().lastSeenMs })
+    persistClockState(clockCheck)
+    if (!clockCheck.ok) {
+      logWarn('license', '检测到系统时间被回拨，拒绝使用', { rollback: describeRollback(clockCheck.rollbackMs) })
+      status = buildStatus(
+        {
+          code: 'clock_rollback',
+          ok: false,
+          degraded: false,
+          message: `检测到系统时间被调回${describeRollback(clockCheck.rollbackMs)}（授权按累计使用时间判定）—— 请把系统时间校准到正确时间后重试`,
+          payload: decodeCertificate(file.certificate),
+        },
+        file.activatedAt,
+      )
+    } else {
+      const check = verifyCertificate(file.certificate, LICENSE_PUBLIC_KEY_PEM, {
+        fingerprint: machineFingerprint(),
+        nowMs: clockCheck.effectiveNowMs,
+      })
+      status = buildStatus(
+        {
+          code: check.code,
+          ok: check.ok,
+          degraded: check.ok && check.degraded,
+          message: check.ok
+            ? check.degraded
+              ? '授权已到期但在离线宽限期内，请尽快续期'
+              : LICENSE_STATUS_TEXT.ok
+            : check.message,
+          payload: check.payload,
+        },
+        file.activatedAt,
+      )
+      /**
+       * 证书里的机器码与"激活时记录的机器码"不一致 ⇒ 说明用户在**别的机器上激活过之后把文件搬过来了**。
+       * 这种情况 `verifyCertificate` 会以 `fingerprint_mismatch` 拒掉，这里只补一条更好排查的日志。
+       */
+      if (!check.ok && file.machineCode && file.machineCode !== status.machineCode) {
+        logWarn('license', '授权文件的激活机器码与本机不一致', { from: file.machineCode, now: status.machineCode })
+      }
     }
   }
   if (lastLoggedCode !== status.code) {

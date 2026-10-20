@@ -170,6 +170,37 @@ export function removeLicenseFile(): boolean {
   }
 }
 
+/**
+ * 读一个**附属状态文件**（如时钟回拨检测用的 `last-seen.json`）。
+ *
+ * 为什么要跟 `license.json` 放同一批候选目录：**删它就得连授权一起删**。
+ * 否则买家可以单独删掉"历史最大时间"把回拨检测重置掉。
+ */
+export function readSidecar(name: string): string | null {
+  const p = findExisting(name)
+  if (!p) return null
+  try {
+    return readFileSync(p, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/** 写一个附属状态文件到**第一个可写**目录。@returns 是否写成功 */
+export function writeSidecar(name: string, contents: string): boolean {
+  for (const dir of LICENSE_DIR_CANDIDATES) {
+    if (!isDirWritable(dir)) continue
+    try {
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, name), contents, 'utf8')
+      return true
+    } catch {
+      // 这个候选写不进去 ⇒ 试下一个
+    }
+  }
+  return false
+}
+
 /** 进程内缓存：同一进程里机器码是常量，不必每次读盘 */
 let cachedInstanceId: string | null = null
 
