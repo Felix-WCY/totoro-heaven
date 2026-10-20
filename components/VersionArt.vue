@@ -18,8 +18,17 @@ import { VERSION_ART_EXTS, versionArtPath } from '~/src/mp/releaseArt'
 
 const props = defineProps<{ version: string }>()
 
+/**
+ * 缓存破除：贺图**文件名不变、内容会换**（例如换掉带签名的旧图）。
+ * 不加这个参数，浏览器会一直用缓存里的旧图 —— 实测出现过"EXE 里已经是新图，
+ * 界面上还是旧图"的情况。
+ *
+ * 用加载时的毫秒时间戳：本地服务，重复下载一张 59KB 的图无感，换来的是**永远不会看到旧图**。
+ */
+const cacheBust = Date.now()
+
 const idx = ref(0)
-const current = computed(() => (idx.value < VERSION_ART_EXTS.length ? `${versionArtPath(props.version)}.${VERSION_ART_EXTS[idx.value]}` : ''))
+const current = computed(() => (idx.value < VERSION_ART_EXTS.length ? `${versionArtPath(props.version)}.${VERSION_ART_EXTS[idx.value]}?v=${cacheBust}` : ''))
 
 /** 当前扩展名加载失败 → 换下一个；全试过则显示占位 */
 const tryNext = () => {

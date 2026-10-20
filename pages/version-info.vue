@@ -1,19 +1,16 @@
 <template>
   <div>
-    <!-- 🔑 授权与使用范围（2026-10-16 改写：原「谢绝公开分享 / 完全免费」口径与新增的授权门禁冲突，
-         现与协作版 README 的行文口径保持一致） -->
+    <!-- 授权与使用范围 -->
     <v-alert type="warning" variant="tonal" density="comfortable" class="mb-4">
       <div class="font-weight-bold">
         <v-icon class="mr-1">mdi-key-variant</v-icon>授权与使用范围
       </div>
       <div class="text-body-2">
-        本程序需发布者签发的<b>授权证书</b>方可使用：首次运行请到「<b>授权</b>」页把本机<b>机器码</b>发给发布者，
-        粘贴签发的证书即可激活，之后可离线使用。证书<b>与机器码绑定</b>，仅在本机有效，
-        转发到其他设备无法通过校验。
+        本程序需<b>激活</b>后方可使用：到「<b>授权</b>」页输入店铺发给你的<b>卡密</b>，
+        联网几秒即可完成激活，之后可<b>离线使用</b>。一份授权<b>绑定一台电脑</b>，换机器需重新购买。
       </div>
       <div class="text-caption mt-1">
-        本工具应仅用于<b>本人设备与获授权的调试场景</b>，并遵守所在学校的规章制度；
-        许可条件以仓库 <code>LICENSE</code> 文件为准。
+        本工具应仅用于<b>本人设备</b>，并遵守所在学校的规章制度。
       </div>
     </v-alert>
 
