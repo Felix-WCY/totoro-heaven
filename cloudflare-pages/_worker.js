@@ -150,6 +150,21 @@ async function issueCertificate(env, cardMeta, fp) {
  */
 const memCounters = new Map()
 
+/**
+ * **全站熔断**（用户要求「不能没有上限」）。
+ *
+ * 单 IP 限流挡不住"换一大把代理 IP"的撞库。这里再加一层**全局**上限：
+ * 任一数据中心一小时内累计失败 ≥ `GLOBAL_FAIL_LIMIT` ⇒ 往 KV 写一个熔断标记，
+ * 之后**所有** `/activate`（不分 IP、不分机房）统一返回 503，持续 `GLOBAL_BLOCK_TTL` 秒。
+ *
+ * ## 为什么标记才写 KV
+ * KV 免费档只有 1000 写/天。若每次失败都写 KV 计数，攻击者几千次就把配额打光，
+ * 正常买家反而全部激活失败。所以：**失败计数走 Cache API（不占配额）**，
+ * 只有"触发熔断"这一刻才写 KV —— 最多 1 次/小时。
+ */
+const GLOBAL_FAIL_LIMIT = 30
+const GLOBAL_BLOCK_TTL = 3600
+
 function clientIp(request) {
   return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown'
 }
@@ -183,6 +198,30 @@ async function counterInc(key, windowSec) {
     }
     cur.n += 1
     return cur.n
+  }
+}
+
+/** 全站是否处于熔断状态（只读 KV 一个 key，不产生写入） */
+async function globallyBlocked(env) {
+  try {
+    return Boolean(await env.CARDS.get('guard:blocked'))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 记一次失败：本机房计数 +1；跨过阈值就写熔断标记（全站生效，最多 1 次写入/小时）。
+ * 调用方**不要**在热路径上重复调用 —— 每次失败一次即可。
+ */
+async function noteFailure(env) {
+  const n = await counterInc('gfails', GLOBAL_BLOCK_TTL)
+  if (n >= GLOBAL_FAIL_LIMIT) {
+    try {
+      await env.CARDS.put('guard:blocked', new Date().toISOString(), { expirationTtl: GLOBAL_BLOCK_TTL })
+    } catch {
+      // 写不进去就只在本机房限流，不影响正常激活
+    }
   }
 }
 
@@ -234,6 +273,16 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
     return json({ ok: true, keyLoaded: keyOk, kvBound: Boolean(env.CARDS), cardsTotal, time: new Date().toISOString() })
   }
 
+  // ── 解除全站熔断（卖家人工放行；熔断也会在 1 小时后自动过期）
+  if (request.method === 'POST' && path === '/admin/unblock') {
+    if (!tokenOk(request.headers.get('Authorization'), env.ADMIN_TOKEN)) {
+      return json({ ok: false, error: '未授权' }, 401)
+    }
+    await env.CARDS.delete('guard:blocked')
+    await env.CARDS.delete('guard:fails')
+    return json({ ok: true, message: '已解除熔断，激活恢复' })
+  }
+
   // ── 激活
   if (request.method === 'POST' && path === '/activate') {
     let body
@@ -250,7 +299,11 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
 
     // ── 撞库防护：在真正查 KV 之前拦下来（避免被刷光读写额度）
     const ip = clientIp(request)
-    // ① 原始洪泛闸：每分钟最多 20 次
+    // ① 全站熔断闸：一旦触发，**所有 IP** 都停（防"换一大批代理 IP"绕过单 IP 限流）
+    if (await globallyBlocked(env)) {
+      return json({ ok: false, error: '激活服务暂时繁忙，请 1 小时后再试（异常流量防护已触发）' }, 503)
+    }
+    // ② 原始洪泛闸：每分钟最多 20 次
     if ((await counterInc(`act:${ip}`, 60)) > 20) {
       return json({ ok: false, error: '请求过于频繁，请稍后再试（每分钟最多 20 次）' }, 429)
     }
@@ -262,6 +315,7 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
     const raw = await env.CARDS.get(`card:${card}`)
     if (!raw) {
       await counterInc(`bad:${ip}`, 600)
+      await noteFailure(env)
       return json({ ok: false, error: '卡密不存在，请核对是否输入有误' }, 404)
     }
 
@@ -273,6 +327,7 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
     }
     if (meta.usedAt) {
       await counterInc(`bad:${clientIp(request)}`, 600)
+      await noteFailure(env)
       return json({ ok: false, error: '这张卡密已被使用过了' }, 409)
     }
 

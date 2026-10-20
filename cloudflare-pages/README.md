@@ -229,3 +229,23 @@ Invoke-RestMethod -Uri "$URL/admin/cards?limit=100" -Headers @{ Authorization = 
 Cache API 异常时降级到进程内计数（只在本 isolate 有效）。
 
 卡密空间 32^8 ≈ 1.1 万亿，配合上面的阈值，爆破在数学上不可行。
+### 全站熔断（硬上限）
+
+单 IP 限流挡不住"换一大把代理 IP"。再叠一层**全局**上限：
+
+| 条件 | 动作 |
+| --- | --- |
+| 任一数据中心 1 小时内累计失败 ≥ **30** 次 | 写 KV 熔断标记 → **所有 IP** 的 `/activate` 返回 **503**，持续 1 小时后自动恢复 |
+
+**手动解除**（卖家自己放行，比如误触发）：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "https://totoro-license.pages.dev/admin/unblock" `
+  -Headers @{ Authorization = "Bearer <管理密钥>" }
+```
+
+**为什么熔断标记才写 KV**：KV 每日只有 1000 次写入。失败计数走 Cache API（不占配额），
+只有触发熔断那一刻才写 1 次 KV ⇒ 最多 1 次写入/小时，不会把配额打光。
+
+> 注意：熔断期间**正常买家也激活不了**。这是"宁可停服也不让撞库成功"的取舍；
+> 阈值 30 次/小时远高于正常业务量（正常一小时 0~2 次失败）。
