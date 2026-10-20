@@ -7,8 +7,8 @@
         <v-icon class="mr-1">mdi-lock-alert</v-icon>需要先完成激活
       </div>
       <div class="text-body-2">
-        本程序需发布者签发的<b>授权证书</b>才能使用。请把下面的<b>本机机器码</b>发给发布者，
-        拿到证书后粘贴激活即可 —— 激活后各功能页会自动恢复可用。
+        本程序需要激活才能使用。<b>在店铺购买的话</b>，把订单里收到的<b>卡密</b>填进下面的「输入卡密激活」即可；
+        如果发布者直接发了一段授权证书给你，点页面下方「改用授权证书激活」。
       </div>
     </v-alert>
 
@@ -159,36 +159,50 @@
       </v-card-text>
     </v-card>
 
-    <!-- ④ 手动粘贴证书（发布者直接把证书发给你时用） -->
+    <!-- 通用错误提示：放在折叠区外面，收起时也要能看到（刷新失败 / 复制失败 / 解绑失败都走这里） -->
+    <v-alert v-if="errorText" type="error" variant="tonal" density="comfortable" class="mb-4">
+      {{ errorText }}
+    </v-alert>
+
+    <!-- ④ 手动粘贴证书（备用方式：发布者直接把证书发给你时用）
+         默认收起 —— 绝大多数买家拿到的是卡密，看到「粘贴授权证书」只会困惑「我是不是还得弄这个」 -->
     <v-card class="mb-4">
-      <v-card-title class="d-flex align-center">
-        <v-icon class="mr-1">mdi-key-variant</v-icon>
-        <span class="text-h6">粘贴授权证书</span>
-      </v-card-title>
       <v-card-text>
-        <div class="text-body-2 mb-2">
-          把发布者发给你的<b>整段证书</b>粘贴到下面 —— 换行、空格都会被自动忽略，不用担心复制多出空行。
-        </div>
-        <v-textarea
-          v-model="certificate"
-          label="授权证书"
-          placeholder="粘贴形如 xxxxx.xxxxx 的一整段文本"
-          rows="4"
-          auto-grow
-          variant="outlined"
-          density="comfortable"
-          hide-details
-        />
-
-        <v-alert v-if="errorText" type="error" variant="tonal" density="comfortable" class="mt-3">
-          {{ errorText }}
-        </v-alert>
-
-        <div class="d-flex flex-wrap ga-2 mt-3">
-          <v-btn color="primary" variant="flat" prepend-icon="mdi-check-decagram" :loading="busy" @click="doActivate">
-            激活
+        <div class="d-flex align-center justify-space-between flex-wrap ga-2">
+          <span class="text-body-2 text-medium-emphasis">
+            没有卡密？如果发布者直接发了一段授权证书给你，可以用那种方式激活。
+          </span>
+          <v-btn
+            variant="tonal"
+            size="small"
+            :prepend-icon="showCertPanel ? 'mdi-chevron-up' : 'mdi-key-variant'"
+            @click="showCertPanel = !showCertPanel"
+          >
+            {{ showCertPanel ? '收起' : '改用授权证书激活' }}
           </v-btn>
-          <v-btn variant="text" :disabled="!certificate" @click="certificate = ''">清空证书</v-btn>
+        </div>
+
+        <div v-if="showCertPanel" class="mt-4">
+          <div class="text-body-2 mb-2">
+            把发布者发给你的<b>整段证书</b>粘贴到下面 —— 换行、空格都会被自动忽略，不用担心复制多出空行。
+          </div>
+          <v-textarea
+            v-model="certificate"
+            label="授权证书"
+            placeholder="粘贴形如 xxxxx.xxxxx 的一整段文本"
+            rows="4"
+            auto-grow
+            variant="outlined"
+            density="comfortable"
+            hide-details
+          />
+
+          <div class="d-flex flex-wrap ga-2 mt-3">
+            <v-btn color="primary" variant="flat" prepend-icon="mdi-check-decagram" :loading="busy" @click="doActivate">
+              激活
+            </v-btn>
+            <v-btn variant="text" :disabled="!certificate" @click="certificate = ''">清空证书</v-btn>
+          </div>
         </div>
       </v-card-text>
     </v-card>
@@ -235,6 +249,8 @@ const { status, ui, loading, refresh: refreshState, applyStatus } = useLicenseSt
 const certificate = ref('')
 const busy = ref(false)
 const errorText = ref('')
+/** 「改用授权证书激活」面板是否展开（默认收起：拿卡密的买家不该被这个干扰） */
+const showCertPanel = ref(false)
 /** 卡密（在线激活用）。与「粘贴证书」是两条并列的路，各自独立的错误提示，互不覆盖 */
 const cardCode = ref('')
 const cardError = ref('')
