@@ -1101,7 +1101,8 @@ const lineOptions = computed(() =>
   height: 60vh;
   min-height: 420px;
   overflow: hidden;
-  background: #0b1220;
+  /* 2026-10-19 换肤：底图容器由 #0b1220 深黑改成浅蓝灰（与 FreePathView 保持一致） */
+  background: #dfe7ef;
   cursor: crosshair;
   user-select: none;
 }

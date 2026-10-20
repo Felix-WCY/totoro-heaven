@@ -63,8 +63,9 @@ const copy = async (value: unknown) => {
   margin: 0;
   padding: 12px;
   border-radius: 8px;
-  background: #101418;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* 2026-10-19 换肤：代码块底色由写死的深蓝黑 #101418 改为主题变量（浅色下是浅灰底） */
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;

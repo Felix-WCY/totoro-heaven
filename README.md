@@ -48,6 +48,48 @@
 [`tools/activation-server/README.md`](tools/activation-server/README.md) —— 需要一个可自行部署的激活服务
 （零依赖单文件，国内云服务器即可）。
 
+## 打包与运行 EXE（Windows x64 单文件）
+
+### 怎么得到 EXE
+
+```powershell
+npm ci
+npm run sea          # = powershell -File pack/sea/build-sea.ps1
+```
+
+约 90 秒后产出 **`dist\totoro-heaven.exe`（约 92 MB）**：单文件、自带 Node 运行时，
+用的人不需要装 Node 或任何依赖。另有两条路：
+
+- GitHub Actions：仓库 → **Actions** → **Build Windows exe** → 某次成功运行的页面底部
+  **Artifacts → `totoro-heaven-exe`**（保留 14 天）；
+- 打包细节：脚本先确认 `.output` 是**干净的生产构建**（缺失/被污染/源码比产物新时自动 `npm run build`），
+  再校验 `src/mp/releaseArt.ts` 里有当前版本条目、裁剪版本图、剥掉 `.map`，最后
+  esbuild 打 launcher → tar 打 `.output` → `node --experimental-sea-config` 生成 blob →
+  复制 `node.exe` → rcedit 设图标 → postject 注入（图标会从最终产物里复核两次）。
+  缺版本条目或 `public/version-art/<版本>.png` 时会**直接失败**，不是 CI 的问题。
+
+### ⚠️ EXE 放在哪个盘很重要（实测）
+
+**建议放在非系统盘的普通目录**，例如 `D:\totoro-heaven\`。
+
+| 位置 | 实测结果 |
+| --- | --- |
+| `D:\任意文件夹\` | ✅ 正常，双击即用 |
+| `C:\Program Files\…` | ⚠️ 解包/写文件容易因权限失败（启动器的"可写运行目录"探测就是为这类机器兜底的） |
+| `C:\Users\<你>\Documents\…` 等用户目录 | ⚠️ 实测会被拦（Windows「受控文件夹访问」/杀软/目录权限），表现为「Windows 已保护你的电脑」或启动后异常；**同一个 EXE 挪到 D 盘就正常** |
+
+### 首次运行
+
+1. 双击 `totoro-heaven.exe`；
+2. 若弹出「**Windows 已保护你的电脑**」→ 点「**更多信息**」→「**仍要运行**」。
+   EXE 未做代码签名（每次重新打包都是全新二进制、在微软那边没有任何声誉），
+   这是 Windows 对"没签名的陌生程序"的常规拦截，**不是报毒**，也没有病毒检测记录；
+3. 黑色控制台窗口会打印地址并**自动打开浏览器**：默认 `http://127.0.0.1:3000/`，
+   端口被占用会自动顺延（窗口里显示实际端口），也可 `set TOTORO_PORT=4000` 指定；
+4. 首次运行会在 **EXE 同级的 `runtime\`** 目录解包运行所需文件（该目录不可写时回退
+   `%TEMP%\totoro-heaven-runtime` → `%LOCALAPPDATA%\totoro-heaven\runtime`）；
+5. 退出 = 直接关掉那个黑色窗口（只关浏览器标签页不算退出）。
+
 ## 许可
 
 本仓库以 MIT 许可发布，具体以 `LICENSE` 文件为准。

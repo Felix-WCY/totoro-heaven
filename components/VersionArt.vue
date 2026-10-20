@@ -32,8 +32,9 @@ const tryNext = () => {
   width: 100%;
   border-radius: 10px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* 2026-10-19 换肤：占位底色/描边改为主题变量（原先写死半透明白，浅色主题下等于没有） */
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.10);
 }
 .art-img {
   display: block;

@@ -1,0 +1,74 @@
+# Build Windows exe —— 产出**本项目真正的交付物**：Node SEA 单文件 EXE（`dist\totoro-heaven.exe`）
+#
+# 🗑️ 历史（2026-10-20 用户要求）：本文件原先跑 `npx electron-builder --win nsis --x64`，
+#    但它从落地那天起就**不可能成功**（实测日志，见 Actions 的 build-windows 任务）：
+#      · `npm warn exec The following package was not found and will be installed: electron-builder@26`
+#        —— 仓库里根本没有 electron-builder 依赖，是 npx 临时下载的；
+#      · `Cannot compute electron version from installed node modules - none of the possible
+#        electron modules are installed.` —— 连 electron 也没装；
+#      · 另外 package.json 里既没有 `"main": "electron-main.cjs"`，也没有 electron-builder 的 `build` 配置。
+#    而本项目真正的打包路线是 `npm run sea`（`pack/sea/build-sea.ps1`，Node SEA 单文件 EXE）——
+#    所以这里改成**直接跑那条已经验证过的命令**：既能当 CI 的打包验证，产物也能直接下载发给用户。
+#
+# ⚠️ 脚本会硬拦的两条（缺了就直接失败，不要以为是 CI 的问题）：
+#   ① `src/mp/releaseArt.ts` 里要有**当前版本**的条目（`[0.5]`：防止把旧 UI 打进新 EXE）；
+#   ② `public/version-art/<version>.png` 必须在仓库里（`[0.6]`：版本页要显示它）。
+#    本地有、但没提交的版本图 ⇒ 本地能打包、CI 会失败（这坑踩过一次，2026-10-20 已把 1.3.2.png 入库）。
+
+name: Build Windows exe
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      # ⚠️ 必须 Node ≥ 20：SEA 用的 `node --experimental-sea-config` 从 20 起可用。
+      #    这里与 ci.yml 统一用 24（20 也能跑，但没必要两套）。
+      - name: 准备 Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: 安装依赖（lockfile 精确安装）
+        run: npm ci
+
+      # 一条命令走完：确认 .output 是干净生产构建（必要时自动 npm run build）
+      # → 校验 releaseArt 条目 / 裁剪版本图 / 剥 .map → esbuild 打包 launcher → tar 打 .output
+      # → 生成 SEA blob → 复制 node.exe → rcedit 设图标（并校验）→ postject 注入 blob（再校验图标）
+      - name: 打包单文件 EXE（Node SEA）
+        run: npm run sea
+
+      - name: 上传产物（totoro-heaven.exe）
+        uses: actions/upload-artifact@v4
+        with:
+          name: totoro-heaven-exe
+          path: dist/totoro-heaven.exe
+          # 没有产物就报错，而不是"绿的但什么都没传"（这是最容易骗过人的失败）
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 产物摘要
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path 'dist/totoro-heaven.exe') {
+            $f = Get-Item 'dist/totoro-heaven.exe'
+            $mb = [math]::Round($f.Length / 1MB, 1)
+            "EXE 打包成功：$($f.Name)  $mb MB  @ $($f.LastWriteTimeUtc) UTC" |
+              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          } else {
+            'EXE 未生成 —— 上面「npm run sea」那一步的报错才是根因（先看它）' |
+              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }

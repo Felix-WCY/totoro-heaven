@@ -356,8 +356,9 @@ useHead({ title: '签到区域编辑 · 龙猫天堂' })
 
 <style scoped>
 .zone-svg {
-  background: #1e1e1e;
-  border: 1px solid #333;
+  /* 2026-10-19 换肤：原来是深灰底 #1e1e1e + #333 描边（浅色主题下像一块黑砖），改为主题变量 */
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 6px;
   flex: 0 0 auto;
 }

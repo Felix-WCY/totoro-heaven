@@ -86,9 +86,13 @@ const distBetween = (a: P, b: P): number => {
   return Math.hypot((b.latitude - a.latitude) * mPerDegLat, (b.longitude - a.longitude) * mLng)
 }
 
-/** 每圈一个颜色（超出则循环），最后一档用于"其它圈" */
-const LAP_COLORS = ['#38bdf8', '#a78bfa', '#22c55e', '#f59e0b', '#f472b6', '#facc15', '#2dd4bf', '#fb7185', '#93c5fd', '#c4b5fd', '#fca5a5', '#86efac']
-const OTHER_COLOR = '#94a3b8'
+/**
+ * 每圈一个颜色（超出则循环），最后一档用于"其它圈"。
+ * 🎨 2026-10-19 换肤：原来取的是"深色底上发亮"的一档（#38bdf8 / #facc15 / #86efac …），
+ * 换到浅色底后黄、浅绿、浅红几乎看不见 ⇒ 整体压深一档，色相顺序不变（蓝/紫/绿/橙/粉/黄/青/玫红…）。
+ */
+const LAP_COLORS = ['#0369a1', '#6d28d9', '#15803d', '#b45309', '#be185d', '#a16207', '#0f766e', '#be123c', '#1d4ed8', '#7e22ce', '#b91c1c', '#4d7c0f']
+const OTHER_COLOR = '#64748b'
 
 /** 当前选中线路在本机路线库里的几何（没配置过 → undefined，那两层就不画） */
 const entry = computed(() => {
@@ -367,13 +371,13 @@ const focus = computed(() => {
         <v-row dense>
           <!-- 左：全图（按圈着色） -->
           <v-col cols="12" md="7">
-            <svg :viewBox="`0 0 ${view.w} ${view.h}`" style="width: 100%; height: auto; background: #0b1220; border-radius: 6px">
-              <path v-if="view.outerPath" :d="view.outerPath" fill="none" stroke="#38bdf8" stroke-width="1.4" opacity="0.9" />
-              <path v-if="view.innerPath" :d="view.innerPath" fill="none" stroke="#a78bfa" stroke-width="1.4" opacity="0.9" />
-              <path v-if="view.lanePath" :d="view.lanePath" fill="none" stroke="#22c55e" stroke-width="1" opacity="0.7" />
+            <svg :viewBox="`0 0 ${view.w} ${view.h}`" style="width: 100%; height: auto; background: #f1f5f9; border: 1px solid rgba(15, 23, 42, 0.08); border-radius: 6px">
+              <path v-if="view.outerPath" :d="view.outerPath" fill="none" stroke="#0284c7" stroke-width="1.4" opacity="0.9" />
+              <path v-if="view.innerPath" :d="view.innerPath" fill="none" stroke="#7c3aed" stroke-width="1.4" opacity="0.9" />
+              <path v-if="view.lanePath" :d="view.lanePath" fill="none" stroke="#16a34a" stroke-width="1" opacity="0.7" />
               <!-- 🆕 非官方路径（2026-09-22）：洋红 = 你画的形状（圈型闭合曲线 / 直线 A→B），与跑道编辑页同一个颜色 -->
-              <path v-if="view.shapePath" :d="view.shapePath" fill="none" stroke="#e879f9" stroke-width="1.6" opacity="0.9" />
-              <path v-if="view.routePath" :d="view.routePath" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" />
+              <path v-if="view.shapePath" :d="view.shapePath" fill="none" stroke="#c026d3" stroke-width="1.6" opacity="0.9" />
+              <path v-if="view.routePath" :d="view.routePath" fill="none" stroke="#64748b" stroke-width="1.4" stroke-dasharray="5 4" />
               <!-- 每圈一色、**细线**（多圈同色 + 粗描边会糊成一条粗带） -->
               <path
                 v-for="p in lapPaths"
@@ -385,14 +389,14 @@ const focus = computed(() => {
                 stroke-width="1.2"
                 opacity="0.95"
               />
-              <circle :cx="view.start.x" :cy="view.start.y" r="3.5" fill="#f59e0b" stroke="#fff" stroke-width="1.2" />
+              <circle :cx="view.start.x" :cy="view.start.y" r="3.5" fill="#d97706" stroke="#fff" stroke-width="1.2" />
               <!-- 🆕 起跑点（1.1.12 需求②）：红点 = 你在跑道编辑页设的起跑点 -->
               <circle
                 v-if="view.startMarker"
                 :cx="view.startMarker.x"
                 :cy="view.startMarker.y"
                 r="4.5"
-                fill="#ef4444"
+                fill="#dc2626"
                 stroke="#fff"
                 stroke-width="1.4"
               />
@@ -403,18 +407,18 @@ const focus = computed(() => {
             <svg
               v-if="focus"
               :viewBox="`0 0 ${focus.w} ${focus.h}`"
-              style="width: 100%; height: auto; background: #0b1220; border-radius: 6px"
+              style="width: 100%; height: auto; background: #f1f5f9; border: 1px solid rgba(15, 23, 42, 0.08); border-radius: 6px"
             >
-              <path v-if="focus.outerPath" :d="focus.outerPath" fill="none" stroke="#38bdf8" stroke-width="1.4" opacity="0.9" />
-              <path v-if="focus.innerPath" :d="focus.innerPath" fill="none" stroke="#a78bfa" stroke-width="1.4" opacity="0.9" />
-              <path v-if="focus.lanePath" :d="focus.lanePath" fill="none" stroke="#22c55e" stroke-width="1" opacity="0.7" />
+              <path v-if="focus.outerPath" :d="focus.outerPath" fill="none" stroke="#0284c7" stroke-width="1.4" opacity="0.9" />
+              <path v-if="focus.innerPath" :d="focus.innerPath" fill="none" stroke="#7c3aed" stroke-width="1.4" opacity="0.9" />
+              <path v-if="focus.lanePath" :d="focus.lanePath" fill="none" stroke="#16a34a" stroke-width="1" opacity="0.7" />
               <!-- 🆕 非官方路径：局部放大图里也画出你画的形状 -->
-              <path v-if="focus.shapePath" :d="focus.shapePath" fill="none" stroke="#e879f9" stroke-width="1.4" opacity="0.9" />
+              <path v-if="focus.shapePath" :d="focus.shapePath" fill="none" stroke="#c026d3" stroke-width="1.4" opacity="0.9" />
               <path
                 v-if="focus.routePath"
                 :d="focus.routePath"
                 fill="none"
-                stroke="#94a3b8"
+                stroke="#64748b"
                 stroke-width="1.4"
                 stroke-dasharray="5 4"
               />

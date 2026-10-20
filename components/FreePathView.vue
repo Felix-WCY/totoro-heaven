@@ -1112,7 +1112,9 @@ const pathOf = (pts: P[], close = false) => {
   height: 60vh;
   min-height: 420px;
   overflow: hidden;
-  background: #0b1220;
+  /* 2026-10-19 换肤：底图容器由 #0b1220 深黑改成浅蓝灰 —— 瓦片没加载完/空隙处不再是一块黑洞。
+     卫星瓦片本身是深色的（那是地图内容），叠在上面的白虚线/白描点仍然是给卫星图配的，保留。 */
+  background: #dfe7ef;
   cursor: crosshair;
   user-select: none;
 }

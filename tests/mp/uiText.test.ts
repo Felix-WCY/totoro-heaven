@@ -103,7 +103,9 @@ const MARKDOWN_IN_TPL_COMMENT_BASELINE: Record<string, number> = {
   'components/RunWorkspace.vue': 36,
   'components/TabGroupShell.vue': 3,
   'components/TrackEditorView.vue': 6,
-  'components/UpdateNotice.vue': 2,
+  // 🆕 2026-10-19：`components/UpdateNotice.vue` 的存量（2 处）已在本轮换肤/改文案时全部清掉
+  // ⇒ 按本测试的纪律「清掉某文件的全部存量后请把该条目删掉」，这里移除了它，
+  // 之后该文件再多出 markdown 星号会直接报错（不再有 2 处的豁免）。
   'layouts/default.vue': 2,
   'pages/morning-sign.vue': 5,
   'pages/version-info.vue': 2,

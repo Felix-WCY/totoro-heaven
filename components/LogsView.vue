@@ -283,7 +283,10 @@ onMounted(() => {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-all;
-  background: rgba(255, 255, 255, 0.03);
+  /* 2026-10-19 换肤：原来写死 `rgba(255,255,255,0.03)`（深色底上才看得见）⇒ 改走主题变量，
+     浅色主题下是浅灰底、深色主题下自动变回半透明白，切主题不用改代码。 */
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.10);
   border-radius: 6px;
   padding: 8px;
 }

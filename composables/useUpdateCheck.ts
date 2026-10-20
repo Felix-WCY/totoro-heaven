@@ -10,9 +10,14 @@
  */
 import { isNewerVersion } from '~/utils/mp/version'
 
-const REPO = 'dboycht/totoro-heaven'
-export const RELEASES_URL = `https://github.com/${REPO}/releases/latest`
-export const REPO_URL = `https://github.com/${REPO}`
+/**
+ * 🆕 2026-10-19（用户要求「远端检测改成查我自己的仓库」）：仓库**不再写死**在这个文件里，
+ * 而是读 `app.config.ts` 的 `updateRepo`（唯一一处要改的地方）。
+ * 这里只留一个兜底值，防止漏配时整个提示条挂掉。
+ */
+const DEFAULT_REPO = '1hao-ui/totoro-heaven'
+export const releasesUrlOf = (repo: string) => `https://github.com/${repo}/releases/latest`
+export const repoUrlOf = (repo: string) => `https://github.com/${repo}`
 const CACHE_KEY = 'totoro_update_check_v1'
 const DISMISS_KEY = 'totoro_update_dismiss_v1'
 /**
@@ -45,7 +50,7 @@ const CANNOT_CONNECT_HINT =
   '无法连接到 GitHub（可能需要科学上网，或被防火墙/代理拦截）。请检查网络后重试；' +
   '若一直连不上，也请去 GitHub 搜一下本项目名，确认「仓库是否已改名 / 迁移到新仓库」。'
 
-async function runCheck(currentVersion: string, opts: { force?: boolean } = {}): Promise<void> {
+async function runCheck(currentVersion: string, repo: string, opts: { force?: boolean } = {}): Promise<void> {
   if (!import.meta.client) return
   if (inflight) return inflight // 并发去重：同时只跑一次
   if (!opts.force && started) return // 自动检查每次会话只做一次；手动（force）随时可跑
@@ -73,14 +78,15 @@ async function runCheck(currentVersion: string, opts: { force?: boolean } = {}):
           /* 忽略 */
         }
         // 2) 缓存命中且未过期 → 直接用缓存（⚠️ 超过 FRESH_MS 视为"陈旧"，宁可重查也不给旧结论）
-        let cached: { at: number; latest: string } | null = null
+        //    ⚠️ 缓存里必须带 repo：换了仓库就不能拿旧仓库的结论当"最新版"
+        let cached: { at: number; latest: string; repo?: string } | null = null
         try {
           const raw = sessionStorage.getItem(CACHE_KEY)
-          if (raw) cached = JSON.parse(raw) as { at: number; latest: string }
+          if (raw) cached = JSON.parse(raw) as { at: number; latest: string; repo?: string }
         } catch {
           /* 忽略 */
         }
-        if (cached && Date.now() - cached.at < FRESH_MS) {
+        if (cached && cached.repo === repo && Date.now() - cached.at < FRESH_MS) {
           state.latest = cached.latest
           state.hasUpdate = isNewerVersion(cached.latest, currentVersion)
           state.checkedAt = cached.at // ← 用缓存时间，界面才能诚实显示"N 分钟前"
@@ -92,7 +98,7 @@ async function runCheck(currentVersion: string, opts: { force?: boolean } = {}):
       // 3) 查 GitHub 最新 Release（只读，不带任何本机数据）
       let res: Response
       try {
-        res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+        res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
           headers: { Accept: 'application/vnd.github+json' },
           signal: AbortSignal.timeout(8000),
         })
@@ -105,20 +111,23 @@ async function runCheck(currentVersion: string, opts: { force?: boolean } = {}):
       if (!res.ok) {
         state.error =
           res.status === 404
-            ? 'GitHub 上找不到这个仓库（可能已改名 / 迁移到新仓库）。请去 GitHub 搜一下本项目名，确认新仓库地址。'
-            : `GitHub 返回 HTTP ${res.status}，暂时无法确认最新版本。请稍后点「立即检测」重试。`
+            ? 'GitHub 上查不到这个仓库（可能已改名 / 迁移，或是私有仓库 —— 私有仓库匿名查不到，属正常）。' +
+              '请把产物发布到公开仓库，或改 `app.config.ts` 的 `updateRepo`。'
+            : res.status === 403
+              ? 'GitHub 返回 HTTP 403（可能是请求太频繁或所在网络被拦）。请稍后点「立即检测」重试。'
+              : `GitHub 返回 HTTP ${res.status}，暂时无法确认最新版本。请稍后点「立即检测」重试。`
         state.checkedAt = Date.now()
         return
       }
       const json = (await res.json().catch(() => null)) as { tag_name?: string } | null
       const latest = json?.tag_name ?? ''
       if (!latest) {
-        state.error = 'GitHub 响应里没有版本号（仓库可能已改名 / 迁移）。请确认新仓库地址。'
+        state.error = 'GitHub 响应里没有版本号（这个仓库还没有发过 Release？）。'
         state.checkedAt = Date.now()
         return
       }
       try {
-        sessionStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), latest }))
+        sessionStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), latest, repo }))
       } catch {
         /* 忽略 */
       }
@@ -156,14 +165,17 @@ function dismissUpdate(): void {
 export function useUpdateCheck() {
   const appConfig = useAppConfig()
   const appVersion = computed(() => String(appConfig.version || 'dev'))
+  /** 要查哪个仓库：`app.config.ts` 的 `updateRepo`（空/漏配时用兜底值） */
+  const repo = computed(() => String((appConfig as { updateRepo?: string }).updateRepo || DEFAULT_REPO))
   return {
     ...toRefs(state),
     appVersion,
-    releasesUrl: RELEASES_URL,
-    repoUrl: REPO_URL,
-    checkForUpdate: () => runCheck(appVersion.value),
+    repo,
+    releasesUrl: computed(() => releasesUrlOf(repo.value)),
+    repoUrl: computed(() => repoUrlOf(repo.value)),
+    checkForUpdate: () => runCheck(appVersion.value, repo.value),
     /** 手动「立即检测」：忽略缓存与"已忽略"，强制重新请求 */
-    forceCheck: () => runCheck(appVersion.value, { force: true }),
+    forceCheck: () => runCheck(appVersion.value, repo.value, { force: true }),
     dismissUpdate,
   }
 }

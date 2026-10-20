@@ -154,7 +154,7 @@
           <v-btn color="primary" variant="flat" prepend-icon="mdi-cloud-download-outline" :loading="busy" @click="doActivateCard">
             卡密激活
           </v-btn>
-          <v-btn variant="text" :disabled="!cardCode" @click="cardCode = ''">清空</v-btn>
+          <v-btn variant="text" :disabled="!cardCode" @click="cardCode = ''">清空卡密</v-btn>
         </div>
       </v-card-text>
     </v-card>
@@ -188,7 +188,7 @@
           <v-btn color="primary" variant="flat" prepend-icon="mdi-check-decagram" :loading="busy" @click="doActivate">
             激活
           </v-btn>
-          <v-btn variant="text" :disabled="!certificate" @click="certificate = ''">清空</v-btn>
+          <v-btn variant="text" :disabled="!certificate" @click="certificate = ''">清空证书</v-btn>
         </div>
       </v-card-text>
     </v-card>

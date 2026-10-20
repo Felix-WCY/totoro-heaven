@@ -1,10 +1,18 @@
+/*
+ * 🎨 2026-10-19 换肤（用户要求「把黑色背景改一下」）：底色由 #121212 纯黑改为米白绿灰 #F4F7F2，
+ * 与 `plugins/vuetify.ts` 里 `themes.light.background` **必须保持一致** —— 页面比内容短时，
+ * 露出来的是这里的 body 底色，两边不一致就会在底部看到一条突兀的深色/色差。
+ * `color-scheme: light` 让浏览器原生控件（滚动条、输入框自动填充、下拉列表）也跟着用浅色，
+ * 否则会出现「浅色页面 + 黑色滚动条」的割裂感。
+ */
 html,
 body,
 #__nuxt {
   min-height: 100%;
   margin: 0;
   padding: 0;
-  background: #121212;
+  background: #f4f7f2;
+  color-scheme: light;
 }
 
 /* 允许页面内容超高时自然滚动，避免被固定高度/overflow 截断（补跑长卡片等） */

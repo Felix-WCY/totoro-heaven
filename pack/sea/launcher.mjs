@@ -27,6 +27,63 @@ const RUNTIME_DIR_CANDIDATES = [
 let RUNTIME_DIR = ''
 
 /**
+ * 打开默认浏览器 —— ⚠️ **2026-10-20 修复（用户反馈"控制台说会自动打开，但浏览器没开"）**。
+ *
+ * 原实现只有一行 `exec('start http://localhost:' + PORT)`，三个毛病：
+ *   ① **没有回调** ⇒ `start` 失败时一个字节都不打印，用户只看到"浏览器将自动打开"然后什么都没有，
+ *      连"为什么"都无从判断（就是这次遇到的情况）；
+ *   ② 打开的是 `localhost`，而服务只绑 `127.0.0.1` —— IPv6 优先的机器上 `localhost` 先解析成 `::1`，
+ *      浏览器可能直接"无法连接"（窗口开了也像没打开）；
+ *   ③ 只押注 `start` 一条路：默认浏览器关联损坏、被安全软件拦、被组策略禁用时没有任何兜底。
+ *
+ * 现在：三重兜底（`start` → `rundll32 url.dll` → PowerShell `Start-Process`），每步失败都**说出原因**，
+ * 三步都失败也一定打印"请手动访问 <地址>"，用户永远有一条能走的路。
+ *
+ * @param {string} url 要打开的地址（用 127.0.0.1，不用 localhost）
+ * @param {() => void} [onDone] 全部尝试结束后的回调（"已在运行"那条分支靠它退出进程）
+ */
+function openBrowser(url, onDone) {
+  /**
+   * ⚠️ 2026-10-20 实测教训（**不要给 URL 加引号**）：
+   *   写成 `start "" "http://127.0.0.1:3000/"` 时，node 的 `exec` 会先拼成
+   *   `cmd.exe /d /s /c "start "" "http://...""` —— 引号在这一层被吃掉/错位，
+   *   cmd 把那个空串当成窗口标题、后面就没有"要执行的命令"了 ⇒ **exit code 0 但什么都不打开**。
+   *   实测对比：同一台机器上 `start <url>`（不加引号）能从 EXE 里正常拉起浏览器，
+   *   加了 `""` 标题就"成功但静默失败"。本项目 URL 只有 `http://127.0.0.1:<port>/`，
+   *   不含空格 / `&` / `^`，所以**不加引号是安全的**，且能绕过上面那层引号错位。
+   */
+  const attempts = [
+    ['start', `start ${url}`],
+    ['rundll32', `rundll32 url.dll,FileProtocolHandler ${url}`],
+    ['powershell', `powershell -NoProfile -Command Start-Process ${url}`],
+  ]
+  const oneLine = (e) => String((e && e.message) || e).split(/[\r\n]/)[0]
+  const next = (i) => {
+    if (i >= attempts.length) {
+      console.log(`  ⚠ 没能自动打开浏览器。请手动访问：${url}`)
+      if (onDone) onDone()
+      return
+    }
+    const [name, cmd] = attempts[i]
+    try {
+      exec(cmd, (err) => {
+        if (err) {
+          console.log(`  ℹ 自动打开浏览器（${name}）失败：${oneLine(err)}`)
+          next(i + 1)
+          return
+        }
+        console.log(`  ℹ 已用 ${name} 打开浏览器：${url}`)
+        if (onDone) onDone()
+      })
+    } catch (e) {
+      console.log(`  ℹ 自动打开浏览器（${name}）抛错：${oneLine(e)}`)
+      next(i + 1)
+    }
+  }
+  next(0)
+}
+
+/**
  * 探测「可写」的运行目录：真的写一个探针文件再删掉，**不靠猜**。
  * @returns 第一个可写的目录；全部不可写时返回 `null`
  */
@@ -108,10 +165,22 @@ async function pickPort() {
    */
   for (let p = PREFERRED_PORT; p <= PREFERRED_PORT + 20; p++) {
     if (await looksLikeOurApp(p)) {
-      console.log(`  ℹ 检测到本工具已在 http://localhost:${p}/ 运行，直接打开浏览器（不再重复启动服务）。`)
+      console.log(`  ℹ 检测到本工具已在 http://127.0.0.1:${p}/ 运行，直接打开浏览器（不再重复启动服务）。`)
       console.log('  ℹ 原因：同一时间只应运行一个本程序实例（多个实例会共用同一个临时解包目录，可能互相影响）。')
-      exec(`start http://localhost:${p}/`)
-      process.exit(0)
+      /**
+       * ⚠️ 2026-10-20：原来这里是 `exec('start ...')` 后**紧接着** `process.exit(0)` ——
+       * 子进程（cmd start）还没真正拉起浏览器，父进程就退了，属于"看运气"的写法。
+       * 现在交回给 openBrowser 的回调退出，并用 8 秒兜底超时防止卡住不退。
+       */
+      const url = `http://127.0.0.1:${p}/`
+      const bail = setTimeout(() => process.exit(0), 8000)
+      openBrowser(url, () => {
+        clearTimeout(bail)
+        process.exit(0)
+      })
+      return await new Promise(() => {
+        /* 永挂：真正的退出由上面的回调 / 兜底超时完成 */
+      })
     }
   }
   for (let p = PREFERRED_PORT; p <= PREFERRED_PORT + 20; p++) {
@@ -229,8 +298,9 @@ function buildBanner() {
   push(CLR.dim + boxBot + CLR.reset, boxBot)
   push(CLR.cyan + slashBot + CLR.reset, slashBot)
   push('', '')
-  const line = `  ▶ 服务已启动，浏览器将自动打开  http://localhost:${PORT}/`
-  push(CLR.green + '  ▶ ' + CLR.reset + '服务已启动，浏览器将自动打开  ' + CLR.cyan + `http://localhost:${PORT}/` + CLR.reset, line)
+  // ⚠️ 用 127.0.0.1 而不是 localhost：服务只绑 127.0.0.1，IPv6 优先的机器上 localhost 会先走 ::1（连不上）
+  const line = `  ▶ 服务已启动，浏览器将自动打开  http://127.0.0.1:${PORT}/`
+  push(CLR.green + '  ▶ ' + CLR.reset + '服务已启动，浏览器将自动打开  ' + CLR.cyan + `http://127.0.0.1:${PORT}/` + CLR.reset, line)
   return centerBlock(styledLines.map((s, i) => ({ styled: s, plain: plainLines[i] })))
 }
 
@@ -257,18 +327,39 @@ async function extractAssets() {
   fs.rmSync(archive, { force: true })
 }
 
+/**
+ * 等服务真的能访问了，再打开浏览器。
+ *
+ * ⚠️ 2026-10-20 修复（用户反馈"没自动打开"）：原实现里 `fetch` 的失败被 `.catch(() => {})` **完全吞掉**，
+ * 一旦探测始终不成功（代理拦截 localhost、服务监听慢、端口被别的程序抢走…），
+ * 表现出来的就是"横幅写着会自动打开，然后永远什么都不发生"，且**没有任何日志**可查。
+ * 现在：
+ *   · 每 10 秒打一行"还没就绪 + 具体原因（HTTP 状态 / 错误信息）"，下次再出问题能直接看出卡在哪；
+ *   · 60 秒还没就绪就放弃自动打开，改为打印可手动点的地址（绝不让用户干等）；
+ *   · 真正打开浏览器统一走 `openBrowser()`（三重兜底 + 失败原因）。
+ */
 function openBrowserWhenReady() {
-  const probe = setInterval(() => {
-    fetch(`http://127.0.0.1:${PORT}/`)
-      .then((r) => {
-        if (r.ok) {
-          clearInterval(probe)
-          exec(`start http://localhost:${PORT}/`)
-        }
-      })
-      .catch(() => {
-        /* server not ready yet */
-      })
+  const url = `http://127.0.0.1:${PORT}/`
+  let tries = 0
+  const probe = setInterval(async () => {
+    tries++
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(1500) })
+      if (r.ok) {
+        clearInterval(probe)
+        openBrowser(url)
+        return
+      }
+      if (tries % 20 === 0) console.log(`  ℹ 服务还没就绪（第 ${tries} 次探测：HTTP ${r.status}），继续等…`)
+    } catch (e) {
+      if (tries % 20 === 0) {
+        console.log(`  ℹ 服务还没就绪（第 ${tries} 次探测：${String((e && e.message) || e).split(/[\r\n]/)[0]}），继续等…`)
+      }
+    }
+    if (tries === 120) {
+      clearInterval(probe)
+      console.log(`  ⚠ 等了 60 秒服务仍未就绪，这次不自动打开浏览器。请手动访问：${url}`)
+    }
   }, 500)
 }
 
