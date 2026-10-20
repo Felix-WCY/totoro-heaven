@@ -17,6 +17,7 @@
  * 生产构建（`npm run build` → 打包 EXE）里 `import.meta.dev === false` ⇒ **强制校验**。
  * 想在本机按生产口径自测，设 `TOTORO_LICENSE_STRICT=1` 即可强制开启校验。
  */
+import { createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { logInfo, logWarn } from '../logger'
 import { decodeCertificate, verifyCertificate } from './certificate'
@@ -28,12 +29,10 @@ import {
   machineCode,
   machineFingerprint,
   preferredLicenseFile,
-  readSidecar,
   removeLicenseFile,
   writeLicenseFile,
-  writeSidecar,
 } from './instance'
-import { checkClock, describeRollback, type ClockCheckResult } from '../../../utils/mp/clockGuard'
+import { checkClock, describeRollback } from '../../../utils/mp/clockGuard'
 import { LICENSE_PUBLIC_KEY_PEM } from './publicKey'
 
 /**
@@ -52,6 +51,7 @@ export const LICENSE_STATUS_TEXT: Record<LicenseStatusCode, string> = {
   fingerprint_mismatch: '证书与本机机器码不匹配（这是发给另一台机器的证书）',
   grace_expired: '授权已过期（且已超出离线宽限期）',
   clock_rollback: '检测到系统时间被调回（授权按累计使用时间判定）—— 请把系统时间校准到正确时间后重试',
+  state_tampered: '本机授权文件被改动过（校验失败），请重新激活',
 }
 
 /** 落盘结构（**不含任何秘密**：证书本身是签名产物，公开保存也无害） */
@@ -63,6 +63,25 @@ interface LicenseFileShape {
   machineCode: string
   /** 激活时间（ISO） */
   activatedAt: string
+  /**
+   * **历史见过的最晚时间**（毫秒）：时钟回拨检测用。
+   * 放在这个文件里（而不是单独的 sidecar）：单独删掉它就能重置检测 ⇒ 必须与授权同生共死。
+   */
+  lastSeenMs: number
+  /**
+   * `lastSeenMs` 的**防篡改校验码**（HMAC）。
+   * 手改 `lastSeenMs`（想把"已用时间"调小以续命）⇒ 校验码对不上 ⇒ 判定 `state_tampered`。
+   * 密钥由「证书 + 机器码」推出，普通用户拿不到算法；要绕过必须反编译。
+   */
+  stateMac: string
+}
+
+/**
+ * 本地状态的防篡改校验码。
+ * 密钥 = 证书原文 + 机器码（两者都在文件里，但用户不知道"怎么算"—— 绕过需要反编译）。
+ */
+function stateMacOf(cert: string, machineCode: string, lastSeenMs: number): string {
+  return createHmac('sha256', `${cert}|${machineCode}`).update(String(Math.floor(lastSeenMs))).digest('hex').slice(0, 32)
 }
 
 export interface LicenseStatus {
@@ -134,6 +153,8 @@ function readLicenseFile(): LicenseFileShape | null {
       certificate: o.certificate,
       machineCode: String(o.machineCode ?? ''),
       activatedAt: String(o.activatedAt ?? ''),
+      lastSeenMs: Number(o.lastSeenMs ?? 0),
+      stateMac: String(o.stateMac ?? ''),
     }
   } catch {
     // 文件损坏 / 权限不足：按"未激活"处理。宁可要求重新激活，也不要因为一个坏文件让服务起不来
@@ -184,27 +205,17 @@ function buildStatus(input: StatusInput, activatedAt: string): LicenseStatus {
  * 那样界面会对着一个只是还没粘证书的用户说"你的证书格式不对"，把人引到完全错误的方向。
  * （本文件第一版正是这么写的，被 `tests/mp/licenseState.test.ts` 抓出来 ⇒ 现在显式给 `not_activated`。）
  */
-/** 时钟状态文件名：与 `license.json` 放同一批候选目录（删它就得连授权一起删） */
-const CLOCK_STATE_NAME = 'last-seen.json'
-
-/** 读「历史见过的最大时间」；没有/损坏都按 `0`（首次运行）处理，绝不抛异常 */
-function readClockState(): { lastSeenMs: number } {
-  const raw = readSidecar(CLOCK_STATE_NAME)
-  if (!raw) return { lastSeenMs: 0 }
+/**
+ * 把「累计使用时间」推进到 `lastSeenMs` 并落盘（**只增不减**）。
+ * 失败不抛：写不进去只是少一层保护，不该让状态查询失败。
+ */
+function persistLastSeen(file: LicenseFileShape, lastSeenMs: number): void {
+  const next: LicenseFileShape = { ...file, lastSeenMs, stateMac: stateMacOf(file.certificate, file.machineCode, lastSeenMs) }
   try {
-    const parsed = JSON.parse(raw) as { at?: unknown }
-    const at = Number(parsed.at)
-    return { lastSeenMs: Number.isFinite(at) && at > 0 ? at : 0 }
+    writeLicenseFile(JSON.stringify(next, null, 2))
   } catch {
-    // 文件写坏了：当作首次运行（宁可少记一次，也不要让程序起不来）
-    return { lastSeenMs: 0 }
+    // 尽力而为：磁盘满/只读时跳过，不影响本次判定
   }
-}
-
-/** 需要时把累计时间写回（只增不减；写不进去不影响本次判定，只是下次少一层保护） */
-function persistClockState(result: ClockCheckResult): void {
-  if (!result.shouldPersist) return
-  writeSidecar(CLOCK_STATE_NAME, JSON.stringify({ at: result.effectiveNowMs, updatedAt: new Date().toISOString() }))
 }
 
 function computeStatus(): LicenseStatus {
@@ -217,50 +228,72 @@ function computeStatus(): LicenseStatus {
     )
   } else {
     /**
-     * **时钟回拨检测**（2026-10-20 补的洞）：
-     * 到期判断用的是买家**本地时钟** —— 把系统时间调回购买那天，证书就永远不过期。
-     * 两道防线：① 回拨超过 24 小时 ⇒ 判定为改时间，强制拒用；
-     *          ② 判定有效期用 `max(当前, 历史最大)` ⇒ 累计时间只增不减，调回去白搭。
+     * **① 本地状态防篡改**（2026-10-20）：
+     * `lastSeenMs` 若被手改（想把"已用时间"调小以续命），HMAC 校验码就对不上 ⇒ 直接拒用。
+     * 校验码缺失也拒用 —— 正常落盘一定带头，缺失说明文件被裁剪或来自旧版本。
      */
-    const clockCheck = checkClock({ nowMs: Date.now(), lastSeenMs: readClockState().lastSeenMs })
-    persistClockState(clockCheck)
-    if (!clockCheck.ok) {
-      logWarn('license', '检测到系统时间被回拨，拒绝使用', { rollback: describeRollback(clockCheck.rollbackMs) })
+    const macOk =
+      file.stateMac.length > 0 && file.stateMac === stateMacOf(file.certificate, file.machineCode, file.lastSeenMs)
+    if (!macOk) {
+      logWarn('license', '本机授权文件状态校验失败，拒绝使用')
       status = buildStatus(
         {
-          code: 'clock_rollback',
+          code: 'state_tampered',
           ok: false,
           degraded: false,
-          message: `检测到系统时间被调回${describeRollback(clockCheck.rollbackMs)}（授权按累计使用时间判定）—— 请把系统时间校准到正确时间后重试`,
+          message: LICENSE_STATUS_TEXT.state_tampered,
           payload: decodeCertificate(file.certificate),
         },
         file.activatedAt,
       )
     } else {
-      const check = verifyCertificate(file.certificate, LICENSE_PUBLIC_KEY_PEM, {
-        fingerprint: machineFingerprint(),
-        nowMs: clockCheck.effectiveNowMs,
-      })
-      status = buildStatus(
-        {
-          code: check.code,
-          ok: check.ok,
-          degraded: check.ok && check.degraded,
-          message: check.ok
-            ? check.degraded
-              ? '授权已到期但在离线宽限期内，请尽快续期'
-              : LICENSE_STATUS_TEXT.ok
-            : check.message,
-          payload: check.payload,
-        },
-        file.activatedAt,
-      )
       /**
-       * 证书里的机器码与"激活时记录的机器码"不一致 ⇒ 说明用户在**别的机器上激活过之后把文件搬过来了**。
-       * 这种情况 `verifyCertificate` 会以 `fingerprint_mismatch` 拒掉，这里只补一条更好排查的日志。
+       * **② 时钟回拨检测**：
+       * 到期判断用的是买家**本地时钟** —— 把系统时间调回购买那天，证书就永远不过期。
+       * 两道防线：① 回拨超过 24 小时 ⇒ 判定为改时间，强制拒用；
+       *          ② 判定有效期用 `max(当前, 历史最大)` ⇒ 累计时间只增不减，调回去白搭。
        */
-      if (!check.ok && file.machineCode && file.machineCode !== status.machineCode) {
-        logWarn('license', '授权文件的激活机器码与本机不一致', { from: file.machineCode, now: status.machineCode })
+      const clockCheck = checkClock({ nowMs: Date.now(), lastSeenMs: file.lastSeenMs })
+      // 推进累计时间（只增不减；写盘有最小步长限制）
+      if (clockCheck.shouldPersist) persistLastSeen(file, clockCheck.effectiveNowMs)
+      if (!clockCheck.ok) {
+        logWarn('license', '检测到系统时间被回拨，拒绝使用', { rollback: describeRollback(clockCheck.rollbackMs) })
+        status = buildStatus(
+          {
+            code: 'clock_rollback',
+            ok: false,
+            degraded: false,
+            message: `检测到系统时间被调回${describeRollback(clockCheck.rollbackMs)}（授权按累计使用时间判定）—— 请把系统时间校准到正确时间后重试`,
+            payload: decodeCertificate(file.certificate),
+          },
+          file.activatedAt,
+        )
+      } else {
+        const check = verifyCertificate(file.certificate, LICENSE_PUBLIC_KEY_PEM, {
+          fingerprint: machineFingerprint(),
+          nowMs: clockCheck.effectiveNowMs,
+        })
+        status = buildStatus(
+          {
+            code: check.code,
+            ok: check.ok,
+            degraded: check.ok && check.degraded,
+            message: check.ok
+              ? check.degraded
+                ? '授权已到期但在离线宽限期内，请尽快续期'
+                : LICENSE_STATUS_TEXT.ok
+              : check.message,
+            payload: check.payload,
+          },
+          file.activatedAt,
+        )
+        /**
+         * 证书里的机器码与"激活时记录的机器码"不一致 ⇒ 说明用户在**别的机器上激活过之后把文件搬过来了**。
+         * 这种情况 `verifyCertificate` 会以 `fingerprint_mismatch` 拒掉，这里只补一条更好排查的日志。
+         */
+        if (!check.ok && file.machineCode && file.machineCode !== status.machineCode) {
+          logWarn('license', '授权文件的激活机器码与本机不一致', { from: file.machineCode, now: status.machineCode })
+        }
       }
     }
   }
@@ -321,11 +354,16 @@ export function activateLicense(certificate: string): ActivateResult {
     logWarn('license', `激活被拒：${check.code}`, { message: check.message })
     return { ok: false, status: getLicenseStatus(true), error: check.message }
   }
+  const nowMs = Date.now()
+  const mc = machineCode()
   const record: LicenseFileShape = {
     v: 1,
     certificate: cert,
-    machineCode: machineCode(),
-    activatedAt: new Date().toISOString(),
+    machineCode: mc,
+    activatedAt: new Date(nowMs).toISOString(),
+    // 激活即"累计时间"的起点：从这一刻开始计时，回拨检测与到期判定都用它
+    lastSeenMs: nowMs,
+    stateMac: stateMacOf(cert, mc, nowMs),
   }
   /**
    * 🆕 多候选目录：写到**第一个可写**目录。

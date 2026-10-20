@@ -117,7 +117,30 @@ test('本地存的证书即使合法也**不会**因为"文件在"就放行（�
   )
   const s = state.getLicenseStatus(true)
   assert.equal(s.licensed, false)
-  assert.ok(['bad_signature', 'malformed', 'fingerprint_mismatch', 'no_public_key'].includes(s.code), `实际：${s.code}`)
+  // `state_tampered`：手写的文件没有本地状态校验码（2026-10-20 加），同样按拒绝处理
+  assert.ok(
+    ['bad_signature', 'malformed', 'fingerprint_mismatch', 'no_public_key', 'state_tampered'].includes(s.code),
+    `实际：${s.code}`,
+  )
+})
+
+test('手改本地状态（lastSeenMs）会被判定为篡改并拒绝', () => {
+  // 模拟"买家编辑 license.json 把已用时间调小以续命"：签名对不上 ⇒ state_tampered
+  writeFileSync(
+    LICENSE_FILE,
+    JSON.stringify({
+      v: 1,
+      certificate: 'eyJ2IjoxfQ.AAAA',
+      machineCode: 'ffffffffffffffff',
+      activatedAt: '2026-01-01T00:00:00.000Z',
+      lastSeenMs: 1, // ← 被调到很久以前
+      stateMac: 'deadbeefdeadbeefdeadbeefdeadbeef',
+    }),
+    'utf8',
+  )
+  const s = state.getLicenseStatus(true)
+  assert.equal(s.licensed, false)
+  assert.equal(s.code, 'state_tampered')
 })
 
 test('licenseFilePath() 与数据目录一致（排查时不至于指错地方）', () => {

@@ -36,6 +36,7 @@
  *    指纹还是对得上的（因为指纹由这两个文件推出）。要根治必须引入服务端在线校验。
  */
 import { createHash, randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { arch, homedir, platform } from 'node:os'
 import { join } from 'node:path'
@@ -248,13 +249,48 @@ export function getInstanceId(): { id: string; persisted: boolean } {
 }
 
 /**
+ * **硬件绑定因子**：Windows 的 `MachineGuid`（安装系统时生成，重装会变）。
+ *
+ * ## 为什么需要它
+ * 机器码原先只由 `instance-id`（一个文件）推导 ⇒ **把 `instance-id` 和 `license.json`
+ * 两个文件一起拷到另一台电脑，机器码就一样了，证书照样有效** —— 等于一次购买无限台。
+ *
+ * 把 MachineGuid 掺进指纹后：拷贝文件的电脑 MachineGuid 不同 ⇒ 机器码不同 ⇒ 证书验不过。
+ *
+ * ## 代价（如实记录）
+ * **重装系统会换 MachineGuid ⇒ 授权失效，需要重新购买。** 这是"不转发"的必要代价 ——
+ * 任何纯本地的机器唯一值都会有这个性质（换主板同理）。读取失败时返回空串（降级为
+ * 只绑文件，不阻断使用）。
+ *
+ * 读取方式用 `reg query`：快（~30ms）、系统自带、结果稳定；进程内缓存，只读一次。
+ */
+let cachedMachineGuid: string | null = null
+
+export function hardwareFactor(): string {
+  if (cachedMachineGuid !== null) return cachedMachineGuid
+  try {
+    const out = execFileSync('reg', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid'], {
+      encoding: 'utf8',
+      timeout: 3000,
+      windowsHide: true,
+    })
+    const m = out.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
+    cachedMachineGuid = m ? m[1].toLowerCase() : ''
+  } catch {
+    // 读不到（非 Windows / 被策略拦 / 非管理员）⇒ 空串降级，不阻断使用
+    cachedMachineGuid = ''
+  }
+  return cachedMachineGuid
+}
+
+/**
  * 本机机器指纹（16 位小写 hex）—— 证书里的 `fp` 必须等于它。
  * 纯计算 + 一次读盘（首次）；运行期调用**零额外开销**（实例 ID 已缓存）。
  */
 export function machineFingerprint(): string {
   const { id } = getInstanceId()
   return createHash('sha256')
-    .update([FINGERPRINT_SALT, id, platform(), arch()].join('|'))
+    .update([FINGERPRINT_SALT, id, platform(), arch(), hardwareFactor()].join('|'))
     .digest('hex')
     .slice(0, MACHINE_CODE_HEX_LEN)
 }

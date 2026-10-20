@@ -83,6 +83,7 @@ export interface LicensePayload {
  * - `fingerprint_mismatch`：证书不是发给这台机器的
  * - `grace_expired`：连离线宽限都过了
  * - `clock_rollback`：检测到系统时间被往回拨（由 `state.ts` 判定，见 `utils/mp/clockGuard.ts`）
+ * - `state_tampered`：本机授权文件里的本地状态被改动过（校验码对不上）—— 由 `state.ts` 判定
  */
 export type LicenseCode =
   | 'ok'
@@ -92,6 +93,7 @@ export type LicenseCode =
   | 'fingerprint_mismatch'
   | 'grace_expired'
   | 'clock_rollback'
+  | 'state_tampered'
 
 export interface LicenseCheck {
   /** 是否放行 */
@@ -114,6 +116,7 @@ export const LICENSE_CODE_TEXT: Record<LicenseCode, string> = {
   fingerprint_mismatch: '证书与本机机器码不匹配（这是发给另一台机器的证书）',
   grace_expired: '授权已过期（且已超出离线宽限期）',
   clock_rollback: '检测到系统时间被调回（授权按累计使用时间判定）—— 请把系统时间校准到正确时间后重试',
+  state_tampered: '本机授权文件被改动过（校验失败），请重新激活',
 }
 
 /** base64url 字符集（严格校验：`Buffer.from` 对非法字符是**静默忽略**的，不先卡住会放过脏输入） */
