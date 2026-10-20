@@ -165,6 +165,19 @@ const memCounters = new Map()
 const GLOBAL_FAIL_LIMIT = 100
 const GLOBAL_BLOCK_TTL = 3600
 
+/**
+ * **单 IP 封禁**（用户要求「单个反复错直接封了」）。
+ *
+ * 上面前两档（每分钟 20 次 / 每 10 分钟 6 次失败）只是"减速"，冷却期一过还能再来。
+ * 这一档是**真封**：24 小时内累计失败 ≥ `IP_BAN_THRESHOLD` 次 ⇒ 该 IP 的 `/activate`
+ * 直接 403，持续 `IP_BAN_WINDOW`（24 小时），到期自动解除。
+ *
+ * 阈值取 15：正常买家手滑 3~4 次碰不到；稳定爆破的 IP 几分钟就超。
+ * 计数与封禁标记都在 Cache API（不占 KV 写配额），按数据中心生效。
+ */
+const IP_BAN_WINDOW = 24 * 60 * 60
+const IP_BAN_THRESHOLD = 15
+
 function clientIp(request) {
   return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown'
 }
@@ -214,7 +227,8 @@ async function globallyBlocked(env) {
  * 记一次失败：本机房计数 +1；跨过阈值就写熔断标记（全站生效，最多 1 次写入/小时）。
  * 调用方**不要**在热路径上重复调用 —— 每次失败一次即可。
  */
-async function noteFailure(env) {
+async function noteFailure(env, ip) {
+  // a) 全站熔断计数（跨机房用 KV 标记，见 GLOBAL_FAIL_LIMIT）
   const n = await counterInc('gfails', GLOBAL_BLOCK_TTL)
   if (n >= GLOBAL_FAIL_LIMIT) {
     try {
@@ -222,6 +236,11 @@ async function noteFailure(env) {
     } catch {
       // 写不进去就只在本机房限流，不影响正常激活
     }
+  }
+  // b) 单 IP 24 小时失败累计 ⇒ 超阈值直接封禁（到期自动解除）
+  if (ip) {
+    const daily = await counterInc(`h24:${ip}`, IP_BAN_WINDOW)
+    if (daily >= IP_BAN_THRESHOLD) await counterInc(`ban:${ip}`, IP_BAN_WINDOW)
   }
 }
 
@@ -273,6 +292,21 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
     return json({ ok: true, keyLoaded: keyOk, kvBound: Boolean(env.CARDS), cardsTotal, time: new Date().toISOString() })
   }
 
+  // ── 解除单个 IP 的封禁（卖家人工放行；封禁 24 小时后也会自动过期）
+  if (request.method === 'POST' && path === '/admin/unban') {
+    if (!tokenOk(request.headers.get('Authorization'), env.ADMIN_TOKEN)) {
+      return json({ ok: false, error: '未授权' }, 401)
+    }
+    let b = {}
+    try { b = await request.json() } catch { /* 忽略 */ }
+    const target = String(b.ip || '').trim()
+    if (!target) return json({ ok: false, error: '请在请求体里给出 ip' }, 400)
+    for (const k of [`ban:${target}`, `bad:${target}`, `h24:${target}`, `act:${target}`]) {
+      try { await caches.default.delete(`https://rl.totoro.invalid/${k}`) } catch { /* 忽略 */ }
+    }
+    return json({ ok: true, message: `已解除 ${target} 的封禁（本机房）` })
+  }
+
   // ── 解除全站熔断（卖家人工放行；熔断也会在 1 小时后自动过期）
   if (request.method === 'POST' && path === '/admin/unblock') {
     if (!tokenOk(request.headers.get('Authorization'), env.ADMIN_TOKEN)) {
@@ -303,6 +337,10 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
     if (await globallyBlocked(env)) {
       return json({ ok: false, error: '激活服务暂时繁忙，请 1 小时后再试（异常流量防护已触发）' }, 503)
     }
+    // ①' 封禁闸：该 IP 24 小时内失败超阈值 ⇒ 直接拒（冷却到期前不再放行）
+    if ((await counterGet(`ban:${ip}`)) > 0) {
+      return json({ ok: false, error: '该网络已被临时封禁（24 小时），请更换网络或联系店铺客服' }, 403)
+    }
     // ② 原始洪泛闸：每分钟最多 20 次
     if ((await counterInc(`act:${ip}`, 60)) > 20) {
       return json({ ok: false, error: '请求过于频繁，请稍后再试（每分钟最多 20 次）' }, 429)
@@ -315,7 +353,7 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
     const raw = await env.CARDS.get(`card:${card}`)
     if (!raw) {
       await counterInc(`bad:${ip}`, 600)
-      await noteFailure(env)
+      await noteFailure(env, ip)
       return json({ ok: false, error: '卡密不存在，请核对是否输入有误' }, 404)
     }
 
@@ -326,8 +364,8 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
       return json({ ok: false, error: '卡密记录损坏，请联系发布者' }, 500)
     }
     if (meta.usedAt) {
-      await counterInc(`bad:${clientIp(request)}`, 600)
-      await noteFailure(env)
+      await counterInc(`bad:${ip}`, 600)
+      await noteFailure(env, ip)
       return json({ ok: false, error: '这张卡密已被使用过了' }, 409)
     }
 

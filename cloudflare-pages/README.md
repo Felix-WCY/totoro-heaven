@@ -249,3 +249,21 @@ Invoke-RestMethod -Method Post -Uri "https://totoro-license.pages.dev/admin/unbl
 
 > 注意：熔断期间**正常买家也激活不了**。这是"宁可停服也不让撞库成功"的取舍；
 > 阈值 100 次/小时远高于正常业务量（正常一小时 0~2 次失败）。
+### 单 IP 封禁（真封，不是减速）
+
+| 条件 | 动作 |
+| --- | --- |
+| 同一 IP **24 小时内累计失败 ≥ 15 次** | 该 IP 的 `/activate` 直接 **403**，持续 **24 小时**，到期自动解除 |
+
+上面两档只是"减速"（冷却期过了还能再来）；这一档是**真封**。阈值 15 次：
+正常买家手滑 3~4 次碰不到，稳定爆破的 IP 半小时就超。
+
+**手动解封**：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "https://totoro-license.pages.dev/admin/unban" `
+  -Headers @{ Authorization = "Bearer <管理密钥>" } `
+  -ContentType "application/json" -Body '{"ip":"1.2.3.4"}'
+```
+
+> 封禁状态存在边缘缓存，**按数据中心生效**；跨机房的同一个 IP 需各自到期。
