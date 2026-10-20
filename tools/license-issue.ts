@@ -73,7 +73,7 @@ function usage(exitCode: number): never {
   console.error('')
   console.error('  --machine   用户在「授权」页复制的机器码（形如 A1B2-C3D4-E5F6-7890，连字符/大小写不敏感）')
   console.error('  --sub       授权对象（客户名或备注，会写进证书，用户界面能看到）')
-  console.error('  --days      有效天数，默认 365（到期后再给 14 天离线宽限）')
+  console.error('  --days      有效天数，默认 365（到期后再给半天离线宽限）')
   console.error('  --features  功能位，逗号分隔，默认 pro（本版仅记录与展示，不做差异化限制）')
   console.error('  --lic       手工指定许可证编号（默认自动生成）')
   console.error('')

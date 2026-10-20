@@ -31,7 +31,8 @@
  */
 
 const DEFAULT_DAYS = 365
-const GRACE_DAYS = 14
+/** 离线宽限：正常到期后再给 **半天**（12 小时）—— 够用户联系续期，又不让"过期"形同虚设 */
+const GRACE_S = 12 * 60 * 60
 const CARD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // 去掉易混的 I O 0 1
 
 // ───────────────────────── 基础工具 ─────────────────────────
@@ -125,7 +126,7 @@ async function issueCertificate(env, cardMeta, fp) {
     feat: ['pro'],
     iat: now,
     exp: now + days * 86400,
-    grace: now + (days + GRACE_DAYS) * 86400,
+    grace: now + days * 86400 + GRACE_S,
   }
   const body = b64uFromString(JSON.stringify(payload))
   const sig = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(body))

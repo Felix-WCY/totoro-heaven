@@ -26,8 +26,30 @@ import { createPublicKey, sign, verify } from 'node:crypto'
 /** 证书载荷版本号。将来改字段含义时递增，老的证书会被判 `malformed`（宁拒绝不误放行）。 */
 export const LICENSE_CERT_VERSION = 1
 
-/** 允许的时钟偏差（秒）：签发方与使用方时钟不可能完全一致，1 天足够宽容且不影响安全。 */
+/**
+ * **签发侧**的时钟偏差容差（秒）：只用于"本地时钟早于证书签发时间"这一条判定。
+ * 1 天足够宽容（用户时钟偏了几小时也能激活），且不影响安全 —— 早于签发时间的证书本来就不该用。
+ */
 export const LICENSE_CLOCK_SKEW_S = 24 * 60 * 60
+
+/**
+ * **离线宽限**（秒）：正常到期之后还能用多久，默认 **12 小时（半天）**。
+ *
+ * 为什么留：离线模型没有服务器，到期那一刻若用户正断网/出差，会毫无预兆地用不了；
+ * 留半天够他联系发布者续期，也不至于让"过期"形同虚设。
+ *
+ * ⚠️ 这个值写在**证书里**（`grace = iat + days + LICENSE_GRACE_S`），
+ * 改它只影响**之后新签发的证书**，已发出的证书仍按原值走。
+ */
+export const LICENSE_GRACE_S = 12 * 60 * 60
+
+/**
+ * **到期侧**的额外容差（秒）：判定"是否已过宽限"时在 `grace` 之上再放宽 1 小时。
+ *
+ * 为什么不再复用 24 小时的 `LICENSE_CLOCK_SKEW_S`：那会把半天宽限悄悄放大成 36 小时，
+ * 和"宽限就是半天"的口径不符。1 小时足够容忍时区设置错误与少量时钟漂移。
+ */
+export const LICENSE_EXPIRY_TOLERANCE_S = 60 * 60
 
 /** 机器码的十六进制长度（8 字节 = 64 bit；这个量级不会碰撞，也够短好念）。 */
 export const MACHINE_CODE_HEX_LEN = 16
@@ -202,8 +224,9 @@ export function issueCertificate(
     feat: input.features && input.features.length ? [...input.features] : ['pro'],
     iat: now,
     exp: now + days * 86400,
-    // 离线宽限：到期后再给 14 天（用户出差/断网时不会突然用不了，供应商也有时间催续期）
-    grace: now + (days + 14) * 86400,
+    // 离线宽限：到期后再给 LICENSE_GRACE_S（默认半天），用户断网/出差时不会突然用不了
+    // 离线宽限 = 正常到期后 LICENSE_GRACE_S（默认半天），不再按"天数"叠加
+    grace: now + days * 86400 + LICENSE_GRACE_S,
   }
   return { certificate: signCertificate(payload, privateKeyPem), payload }
 }
@@ -258,7 +281,7 @@ export function verifyCertificate(
   // ④ 有效期（含时钟偏差容差）
   const now = Math.floor((opts.nowMs ?? Date.now()) / 1000)
   if (now + LICENSE_CLOCK_SKEW_S < payload.iat) return fail('malformed', payload)
-  if (now > payload.grace + LICENSE_CLOCK_SKEW_S) return fail('grace_expired', payload)
+  if (now > payload.grace + LICENSE_EXPIRY_TOLERANCE_S) return fail('grace_expired', payload)
 
   return {
     ok: true,

@@ -47,8 +47,8 @@ const CARDS_FILE = join(DATA_DIR, 'cards.json')
 
 /** 默认有效天数（发卡时没指定就用它） */
 const DEFAULT_DAYS = 365
-/** 离线宽限天数：与客户端约定一致（exp 之后还允许用 14 天） */
-const GRACE_DAYS = 14
+/** 离线宽限：正常到期后再给半天（12 小时）—— 与客户端 `LICENSE_GRACE_S` 保持一致 */
+const GRACE_S = 12 * 60 * 60
 /** 卡密字符集：去掉容易看错的 I O 0 1 */
 const CARD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 /** /activate 限流：同一 IP 每分钟最多尝试次数（防暴力猜卡密） */
@@ -163,7 +163,7 @@ function issueCertificate(cardMeta, fp) {
     feat: ['pro'],
     iat: now,
     exp: now + days * 86400,
-    grace: now + (days + GRACE_DAYS) * 86400,
+    grace: now + days * 86400 + GRACE_S,
   }
   const body = b64u(JSON.stringify(payload))
   // 客户端 verify 的是 body 这段字符串的字节，所以这里也必须签 body（不是 JSON 原文）

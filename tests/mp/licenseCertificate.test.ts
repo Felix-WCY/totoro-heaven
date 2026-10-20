@@ -49,7 +49,8 @@ test('正路径：签发 → 验签通过，且字段如实落进载荷', () => 
   assert.equal(r.payload?.sub, '张三')
   assert.equal(r.payload?.lic, 'TH-TEST-0001')
   assert.equal(r.payload?.fp, FP)
-  assert.equal(payload.grace - payload.exp, 14 * DAY, '离线宽限应恰好比正常到期晚 14 天')
+  // 离线宽限改为「到期后再给半天」（2026-10-20：原来 14 天太长，过期形同虚设）
+  assert.equal(payload.grace - payload.exp, 12 * 60 * 60, '离线宽限应恰好比正常到期晚 12 小时（半天）')
 })
 
 test('正路径：机器码大小写/连字符不敏感（用户复制粘贴的形态都能对上）', () => {
