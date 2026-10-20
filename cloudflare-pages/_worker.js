@@ -135,6 +135,57 @@ async function issueCertificate(env, cardMeta, fp) {
 
 // ───────────────────────── 主逻辑 ─────────────────────────
 
+// ───────────────────────── 撞库防护（限流）─────────────────────────
+/**
+ * `/activate` 是唯一能探测「某张卡密是否存在」的入口，必须限频。
+ *
+ * 额度设计（卡密空间 32^8 ≈ 1.1 万亿，正常买家一次就对）：
+ *   · 每 IP 每 60 秒最多 **20 次** `/activate` —— 挡住原始洪泛
+ *   · 每 IP 每 10 分钟最多 **6 次失败** —— 挡住稳定爆破
+ *
+ * **刻意不占 KV 写入额度**：KV 免费档只有 1000 写/天。若用 KV 记失败次数，
+ * 攻击者一天就能把写配额打光 ⇒ 正常买家全部激活失败。所以计数走 **Cache API**
+ * （每数据中心的边缘缓存，不计入 KV 额度）。Cache API 异常时降级到进程内 Map
+ * （只在本 isolate 有效，跨机房不准，但能挡住单点爆破）。
+ */
+const memCounters = new Map()
+
+function clientIp(request) {
+  return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown'
+}
+
+async function counterGet(key) {
+  try {
+    const hit = await caches.default.match(`https://rl.totoro.invalid/${key}`)
+    return hit ? Number(await hit.text()) || 0 : 0
+  } catch {
+    const cur = memCounters.get(key)
+    return cur && Date.now() <= cur.resetAt ? cur.n : 0
+  }
+}
+
+async function counterInc(key, windowSec) {
+  try {
+    const url = `https://rl.totoro.invalid/${key}`
+    const hit = await caches.default.match(url)
+    const n = (hit ? Number(await hit.text()) || 0 : 0) + 1
+    await caches.default.put(
+      url,
+      new Response(String(n), { headers: { 'Cache-Control': `max-age=${windowSec}` } }),
+    )
+    return n
+  } catch {
+    const now = Date.now()
+    const cur = memCounters.get(key)
+    if (!cur || now > cur.resetAt) {
+      memCounters.set(key, { n: 1, resetAt: now + windowSec * 1000 })
+      return 1
+    }
+    cur.n += 1
+    return cur.n
+  }
+}
+
 async function handle(request, env) {
   const url = new URL(request.url)
   const path = url.pathname
@@ -197,8 +248,22 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
     if (!fp) return json({ ok: false, error: '机器码格式不正确（应为 16 位十六进制）' }, 400)
     if (!env.CARDS) return json({ ok: false, error: '服务端未绑定 KV（CARDS），无法记录卡密状态' }, 500)
 
+    // ── 撞库防护：在真正查 KV 之前拦下来（避免被刷光读写额度）
+    const ip = clientIp(request)
+    // ① 原始洪泛闸：每分钟最多 20 次
+    if ((await counterInc(`act:${ip}`, 60)) > 20) {
+      return json({ ok: false, error: '请求过于频繁，请稍后再试（每分钟最多 20 次）' }, 429)
+    }
+    // ② 失败闸：10 分钟内错 6 次就先锁住（正常买家不会连错 6 次）
+    if ((await counterGet(`bad:${ip}`)) >= 6) {
+      return json({ ok: false, error: '尝试失败次数过多，请 10 分钟后再试；卡密可向店铺客服核对' }, 429)
+    }
+
     const raw = await env.CARDS.get(`card:${card}`)
-    if (!raw) return json({ ok: false, error: '卡密不存在，请核对是否输入有误' }, 404)
+    if (!raw) {
+      await counterInc(`bad:${ip}`, 600)
+      return json({ ok: false, error: '卡密不存在，请核对是否输入有误' }, 404)
+    }
 
     let meta
     try {
@@ -206,7 +271,10 @@ padding:40px;max-width:640px;margin:0 auto}h1{font-size:19px}code{background:#1c
     } catch {
       return json({ ok: false, error: '卡密记录损坏，请联系发布者' }, 500)
     }
-    if (meta.usedAt) return json({ ok: false, error: '这张卡密已被使用过了' }, 409)
+    if (meta.usedAt) {
+      await counterInc(`bad:${clientIp(request)}`, 600)
+      return json({ ok: false, error: '这张卡密已被使用过了' }, 409)
+    }
 
     let issued
     try {
