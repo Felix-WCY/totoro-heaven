@@ -12,10 +12,12 @@ import assert from 'node:assert/strict'
 import {
   VERIFIED_SCHOOLS,
   SHARED_DOMAIN_HOST,
+  KNOWN_SCHOOL_DOMAINS,
   LINE_NOT_REQUIRED_REASON,
   RELAX_GATE_FOR_CAPTURE,
   evaluateRunGate,
   findVerifiedSchool,
+  isKnownSchoolDomain,
   isNightBlocked,
   isSchoolVerified,
   isSharedDomain,
@@ -107,10 +109,20 @@ test('共享域判定：同域通过；独立域/非法串不通过', () => {
   assert.equal(isSharedDomain(null), false)
 })
 
-test('非共享域提示语点明"只支持共享域"', () => {
-  const msg = nonSharedDomainMessage('https://zhygp.just.edu.cn')
+test('未知域名提示语：点明独立域 + 引导登记（2026-10-23 放宽后不再说"只支持共享域"）', () => {
+  const msg = nonSharedDomainMessage('https://evil.example.com')
   assert.match(msg, /独立域/)
-  assert.match(msg, new RegExp(SHARED_DOMAIN_HOST.replace(/\./g, '\\.')))
+  assert.match(msg, /不在已知学校域名列表内/)
+  assert.match(msg, /登记/)
+})
+
+test('学校域名判据：共享域与已知独立域放行，未知域拒绝', () => {
+  assert.equal(isKnownSchoolDomain('https://' + SHARED_DOMAIN_HOST), true)
+  for (const h of KNOWN_SCHOOL_DOMAINS) {
+    assert.equal(isKnownSchoolDomain('https://' + h), true, `应放行 ${h}`)
+  }
+  assert.equal(isKnownSchoolDomain('https://evil.example.com'), false)
+  assert.equal(isKnownSchoolDomain(''), false)
 })
 
 test('未验证学校：给软提示（含已验证名单），已验证学校不给提示', () => {

@@ -133,7 +133,7 @@ export function nonSharedDomainMessage(baseUrl: string | null | undefined): stri
       return String(baseUrl ?? '未知域名')
     }
   })()
-  return `该校使用独立域（${host}），不在支持范围内（只支持共享域 ${SHARED_DOMAIN_HOST}）。专属小程序等于另一套后端，本项目不支持。`
+  return `该校使用独立域（${host}），不在已知学校域名列表内。若是新学校，请把该校小程序里的请求域名发给发布者登记。`
 }
 
 /** 门禁输入：三个开关的读取状态 + 当前线路 */
