@@ -31,7 +31,7 @@ import { reportBlocked } from '~/composables/useDiagEventReporter'
 import {
   evaluateRunGate,
   findVerifiedSchool,
-  isKnownSchoolDomain,
+  isSharedDomain,
   nonSharedDomainMessage,
   unverifiedSchoolNotice,
 } from '~/utils/mp/schoolGate'
@@ -255,15 +255,20 @@ export function useMpRealData() {
     const raw = info.data as Record<string, unknown>
     const schoolCode = String(raw.schoolCode ?? '')
 
-    // ② 按**真实 schoolCode** 解析该校基址（多租户），校验是否已知学校域名
-    //    ⚠️ 2026-10-23 放宽：原判据是"必须等于共享域"，会把 5 所使用独立域名的学校
-    //       （如辽宁科技大学 yanggpa.ustl.edu.cn）在**登录成功后**直接拒掉。
-    //       现改为"共享域 ∪ 学校列表里的独立域名"，仍然拒绝来路不明的域名。
+    // ② 按**真实 schoolCode** 解析该校基址（多租户），校验是否共享域（支持范围判据①）
+    //
+    // 🔴 2026-10-23 实测结论：**不能放宽到"各校独立域名"**。
+    //    用免鉴权端点探测 5 个独立域名的后端：
+    //      getSunRunSchoolList        → 401 / 503（非 JSON，像网关/WAF 直接挡）
+    //      getSunRunFirstConfiguration→ 401 / 503
+    //    而共享域 `wxxcx.xtotoro.com` 两者都是 200 且返回正常 JSON。
+    //    ⇒ 独立域名确实是**另一套后端**（作者原话），放宽只会把"明确的拒绝"
+    //      变成"登录后读任务报 401"的莫名失败，对用户更糟。
     const resolved = (await MpApiWrapper.resolveSchoolBaseUrl(schoolCode, { token })) || undefined
-    if (resolved && !isKnownSchoolDomain(resolved)) {
+    if (resolved && !isSharedDomain(resolved)) {
       status.value = 'error'
       error.value = nonSharedDomainMessage(resolved)
-      logWarn('real', '学校域名不在已知列表，已拒绝', { schoolCode })
+      logWarn('real', '学校不在共享域，已拒绝', { schoolCode })
       return false
     }
     const baseUrl = resolved || MP_DEFAULT_BASE_URL

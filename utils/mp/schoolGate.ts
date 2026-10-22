@@ -25,13 +25,20 @@ export function isSharedDomain(baseUrl: string | null | undefined): boolean {
 /**
  * **各校独立租户域名**（2026-10-23 实测 `getSunRunSchoolList` 得到）。
  *
- * ## 背景：为什么共享域判据必须放宽
- * 该接口实测返回 **13 所学校 / 6 个域名**，其中 5 所不在共享域 `wxxcx.xtotoro.com` 上，
- * 而是各自的校方域名。原实现把"不在共享域"当成"不支持"，导致这些学校
- * **能登录、但一读数据就被拒**（`非共享域` 错误）—— 拓展多学校时这是硬阻塞。
+ * ## 🔴 这里只是**数据记录**，不要拿它去放行
+ * 曾尝试用这份名单放宽"必须在共享域"的判据，实测后被**否定**。用免鉴权端点探测这 5 个域名：
  *
- * ⚠️ 这不是把门全开：只放行**供应商学校列表里真实存在**的域名；
- * 服务端代理侧还有独立白名单（`server/api/mp/[...slug].ts`）做同样校验。
+ * | 主机 | getSunRunSchoolList | getSunRunFirstConfiguration |
+ * | --- | --- | --- |
+ * | wxxcx.xtotoro.com（共享域） | 200 ✅ body[13] | 200 ✅ 正常 JSON |
+ * | yanggpa.ustl.edu.cn | **401** | **401**（非 JSON） |
+ * | 其余 4 个（zjyc/shtc/jsfpc/just） | **401 / 503** | **401** |
+ *
+ * ⇒ 独立域名确实是**另一套后端**（`useMpReal.ts` 的原话），
+ * 放行只会把"该校不在支持范围"的明确提示，变成"登录后读任务报 401"的莫名失败。
+ *
+ * 保留这份名单只为**排错时对照**（用户报错里出现某个 host，能立刻认出是哪所学校）。
+ * `isKnownSchoolDomain()` 因此**不在生产链路使用**，只被单测覆盖。
  */
 export const KNOWN_SCHOOL_DOMAINS: readonly string[] = [
   'sunnysport.zjyc.edu.cn',
