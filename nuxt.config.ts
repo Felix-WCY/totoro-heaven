@@ -79,8 +79,10 @@ export default defineNuxtConfig({
         { name: 'description', content: '阳光跑（乐学/龙猫校园）跑步记录辅助工具 · 微信小程序后端线' },
       ],
       link: [
-        { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' },
-        { rel: 'icon', type: 'image/vnd.microsoft.icon', href: '/logo.ico' },
+        // ⚠️ 2026-10-21：图标链接带 `?v=2` —— 浏览器对 favicon 的缓存极其顽固，
+        // 不换 URL 的话，换图标之后老标签页里可能一直显示旧图标（实测踩到）。
+        { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico?v=3' },
+        { rel: 'icon', type: 'image/vnd.microsoft.icon', href: '/logo.ico?v=3' },
       ],
     },
   },
