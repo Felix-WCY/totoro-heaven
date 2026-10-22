@@ -24,6 +24,7 @@
  *   兼容旧写法：`/api/mp/sunrun/getRunBegin` → `<base>/wxxcx/sunrun/getRunBegin`（自动补 `/wxxcx`）
  */
 import { MP_API_PREFIX, MP_HOST, MP_PATH_PREFIXES, MP_UPSTREAM_HEADER } from '../../../src/mp/types'
+import { KNOWN_SCHOOL_DOMAINS } from '../../../utils/mp/schoolGate'
 import { summarizeUpstream } from '../../../utils/mp/logFormat'
 import { RESP_BODY_MAX_BYTES, convergeLogLine, knownValuePairs, summarizeRespShape, summarizeResponseBody, unpackNote } from '../../../utils/mp/responseRecord'
 import { logError, logRawLine, summarizeRequestBody, logWarn } from '../../utils/logger'
@@ -38,15 +39,69 @@ import { fingerprintOf } from '../../utils/tokenScanState'
 const ALLOWED_UPSTREAM_SUFFIXES = ['xtotoro.com']
 
 /**
+ * 🔒 允许的上游**精确主机**（各校独立租户域名）。
+ *
+ * ## 为什么需要这个（2026-10-23 拓展多学校时发现）
+ * `getSunRunSchoolList`（免鉴权）实测返回 13 所学校、6 个域名 —— 其中 **5 所不在共享域**
+ * `wxxcx.xtotoro.com` 上，而是各自的校方域名（如辽宁科技大学 `yanggpa.ustl.edu.cn`）。
+ * 只放行 `xtotoro.com` 后缀的话，这些学校**登录成功也读不到任何数据**：
+ * `resolveSchoolBaseUrl()` 会填 `x-mp-upstream=https://yanggpa.ustl.edu.cn`，
+ * 被白名单判为非法 → 静默回落到共享域 → 拿到的是别的租户的数据/空数据。
+ *
+ * 种子值来自 `utils/mp/schoolGate.ts` 的 `KNOWN_SCHOOL_DOMAINS`（客户端用同一份，避免两处不同步）；
+ * 运行时还会从接口**动态补充**（见 `refreshAllowedHosts`），以后新增租户不用改代码。
+ */
+const ALLOWED_EXACT_HOSTS = new Set<string>(KNOWN_SCHOOL_DOMAINS)
+
+/** 上次从学校列表同步的时间戳（0 = 还没同步过） */
+let allowedHostsSyncedAt = 0
+/** 同步间隔：30 分钟。失败时静默（种子值兜底），不阻塞任何请求 */
+const ALLOWED_HOSTS_TTL_MS = 30 * 60 * 1000
+
+/**
+ * 从 `getSunRunSchoolList` 拉一次各校 `domainUrl`，把主机名并入白名单。
+ * **失败静默**：拿不到就继续用种子值，绝不能因为一次网络抖动让所有请求失败。
+ */
+async function refreshAllowedHosts(): Promise<void> {
+  if (Date.now() - allowedHostsSyncedAt < ALLOWED_HOSTS_TTL_MS) return
+  allowedHostsSyncedAt = Date.now()
+  try {
+    const res = await fetch(`${MP_HOST}/wxapi/platform/active/getSunRunSchoolList`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(10_000),
+    })
+    const json = (await res.json()) as { body?: Array<{ domainUrl?: string }> }
+    let added = 0
+    for (const s of json.body ?? []) {
+      try {
+        const h = new URL(String(s.domainUrl ?? '')).host.toLowerCase()
+        if (h && !ALLOWED_EXACT_HOSTS.has(h)) {
+          ALLOWED_EXACT_HOSTS.add(h)
+          added += 1
+        }
+      } catch {
+        // 坏值跳过
+      }
+    }
+    if (added > 0) logWarn('mp-proxy', `上游白名单新增 ${added} 个学校域名`, { total: ALLOWED_EXACT_HOSTS.size })
+  } catch {
+    // 静默：种子值仍然有效
+  }
+}
+
+/**
  * 上游请求超时（毫秒）。
  * 取 20 秒：比本项目其余上游调用（15–20 秒）一致，且明显长于正常响应（实测多为 200–600 ms），
  * 只在"网络/校方接口真的卡住"时才触发，避免误杀慢响应。
  */
 const UPSTREAM_TIMEOUT_MS = 40_000
 
-/** 主机是否在白名单内（`xtotoro.com` 及其子域） */
+/** 主机是否在白名单内（精确域名集合 ∪ `xtotoro.com` 及其子域） */
 const isAllowedUpstreamHost = (hostname: string): boolean => {
   const host = hostname.toLowerCase()
+  if (ALLOWED_EXACT_HOSTS.has(host)) return true
   return ALLOWED_UPSTREAM_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))
 }
 
@@ -79,6 +134,9 @@ const normalizeBase = (raw: string | undefined | null, fallback: string): string
 }
 
 export default defineEventHandler(async (event) => {
+  // 🔄 顺带刷新"各校独立域名"白名单（30 分钟一次，失败静默）；不 await，绝不阻塞本次代理
+  void refreshAllowedHosts()
+
   const config = useRuntimeConfig()
   const defaultBase = normalizeBase(
     (config.mp as { baseUrl?: string } | undefined)?.baseUrl || MP_HOST,

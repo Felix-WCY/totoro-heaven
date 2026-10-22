@@ -22,6 +22,42 @@ export function isSharedDomain(baseUrl: string | null | undefined): boolean {
   }
 }
 
+/**
+ * **各校独立租户域名**（2026-10-23 实测 `getSunRunSchoolList` 得到）。
+ *
+ * ## 背景：为什么共享域判据必须放宽
+ * 该接口实测返回 **13 所学校 / 6 个域名**，其中 5 所不在共享域 `wxxcx.xtotoro.com` 上，
+ * 而是各自的校方域名。原实现把"不在共享域"当成"不支持"，导致这些学校
+ * **能登录、但一读数据就被拒**（`非共享域` 错误）—— 拓展多学校时这是硬阻塞。
+ *
+ * ⚠️ 这不是把门全开：只放行**供应商学校列表里真实存在**的域名；
+ * 服务端代理侧还有独立白名单（`server/api/mp/[...slug].ts`）做同样校验。
+ */
+export const KNOWN_SCHOOL_DOMAINS: readonly string[] = [
+  'sunnysport.zjyc.edu.cn',
+  'yanggpa.ustl.edu.cn',
+  'shtc.jscn.edu.cn',
+  'sunrun.jsfpc.edu.cn',
+  'zhygp.just.edu.cn',
+]
+
+/** 取基址的 host（解析失败返回小写原文） */
+function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host.toLowerCase()
+  } catch {
+    return baseUrl.trim().toLowerCase()
+  }
+}
+
+/** 是否属于"已知学校域名"（共享域 ∪ 各校独立租户域名） */
+export function isKnownSchoolDomain(baseUrl: string | null | undefined): boolean {
+  const raw = String(baseUrl ?? '').trim()
+  if (!raw) return false
+  if (isSharedDomain(raw)) return true
+  return KNOWN_SCHOOL_DOMAINS.includes(hostOf(raw))
+}
+
 /** 登记表里的一所学校 */
 export interface VerifiedSchool {
   /** 学校代码（= GetStudentInfoByToken 的 schoolCode） */
