@@ -31,7 +31,7 @@ import { reportBlocked } from '~/composables/useDiagEventReporter'
 import {
   evaluateRunGate,
   findVerifiedSchool,
-  isSharedDomain,
+  isKnownSchoolDomain,
   nonSharedDomainMessage,
   unverifiedSchoolNotice,
 } from '~/utils/mp/schoolGate'
@@ -255,20 +255,22 @@ export function useMpRealData() {
     const raw = info.data as Record<string, unknown>
     const schoolCode = String(raw.schoolCode ?? '')
 
-    // ② 按**真实 schoolCode** 解析该校基址（多租户），校验是否共享域（支持范围判据①）
+    // ② 按**真实 schoolCode** 解析该校基址（多租户），校验是否**已知学校域名**
     //
-    // 🔴 2026-10-23 实测结论：**不能放宽到"各校独立域名"**。
-    //    用免鉴权端点探测 5 个独立域名的后端：
-    //      getSunRunSchoolList        → 401 / 503（非 JSON，像网关/WAF 直接挡）
-    //      getSunRunFirstConfiguration→ 401 / 503
-    //    而共享域 `wxxcx.xtotoro.com` 两者都是 200 且返回正常 JSON。
-    //    ⇒ 独立域名确实是**另一套后端**（作者原话），放宽只会把"明确的拒绝"
-    //      变成"登录后读任务报 401"的莫名失败，对用户更糟。
+    // 🟢 2026-10-23 实测结论（**推翻我中途的错误判断**）：
+    //    那 5 个独立域名与共享域是**同一套 API**，只是网关要求**必须带 Authorization 头**。
+    //    对比探测（均带 `Authorization: Bearer null` —— 这是本项目既有约定）：
+    //      getSunRunFirstConfiguration → 共享 200 / 辽科大 200 / 其余 4 个 200
+    //      学生档案、任务纸、学期列表、任务约束、摄像头杆、开场人脸配置、随机抽查配置
+    //                                  → 两个域名响应**完全一致**
+    //    ⚠️ 我曾因**漏发 Authorization 头**得到 401/503，误判为"另一套后端"并撤回放宽 —— 那是错的。
+    //    唯一例外：`getSunRunSchoolList` 在租户域返回 503（该端点只在共享域提供），
+    //    但程序**始终在共享域查列表**（`resolveSchoolBaseUrl` 不传 baseUrl）⇒ 不受影响。
     const resolved = (await MpApiWrapper.resolveSchoolBaseUrl(schoolCode, { token })) || undefined
-    if (resolved && !isSharedDomain(resolved)) {
+    if (resolved && !isKnownSchoolDomain(resolved)) {
       status.value = 'error'
       error.value = nonSharedDomainMessage(resolved)
-      logWarn('real', '学校不在共享域，已拒绝', { schoolCode })
+      logWarn('real', '学校域名不在已知列表，已拒绝', { schoolCode })
       return false
     }
     const baseUrl = resolved || MP_DEFAULT_BASE_URL
