@@ -241,7 +241,8 @@ export function useMpMorningSign() {
         signDate?: string
       }>('/api/local/mornsign-submit', {
         method: 'POST',
-        body: { snCode: sn, token: t, pointId, phoneInfo: navigator?.userAgent, zone },
+        // `baseUrl` 必须是**该校**基址（多租户）：服务端按白名单校验，非法/缺省回落共享域
+        body: { snCode: sn, token: t, pointId, phoneInfo: navigator?.userAgent, zone, baseUrl: session.value?.baseUrl },
       })
       logInfo('real', '早操签到提交结果', {
         accepted: res.accepted,

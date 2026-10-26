@@ -31,10 +31,11 @@ import {
 import { judgeMpResponse, unwrapMpResponse } from '../../../src/mp/envelope'
 import { logInfo, logWarn } from '../../utils/logger'
 import { assertLocalRequest } from '../../utils/tokenScanState'
+import { normalizeAllowedBase } from '../../utils/mpUpstream'
 
 /** 先读一次任务，按 pointId 取回该点位的完整资料（taskId/坐标/qrCode） */
-async function fetchPoint(input: { snCode: string; token: string }, pointId: string) {
-  const res = await fetch(`${MP_HOST}${MP_ENDPOINTS.mornSignPaper.path}`, {
+async function fetchPoint(input: { snCode: string; token: string; base: string }, pointId: string) {
+  const res = await fetch(`${input.base}${MP_ENDPOINTS.mornSignPaper.path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json;charset=UTF-8', Authorization: `Bearer ${input.token}` },
     body: JSON.stringify({ stuNumber: input.snCode, token: input.token }),
@@ -72,6 +73,8 @@ export default defineEventHandler(async (event) => {
     phoneInfo?: string
     /** 签到区域配置（每个点位一份，来自「签到区域编辑」页）；不传则退回默认圆盘抖动 */
     zone?: Record<string, unknown> | null
+    /** 该校 API 基址（多租户：共享域或各校独立租户域）。缺省/非法回落共享域 */
+    baseUrl?: string
   }
   const snCode = String(body?.snCode ?? '').trim()
   const token = String(body?.token ?? '').trim()
@@ -80,8 +83,11 @@ export default defineEventHandler(async (event) => {
   if (!token) throw createError({ statusCode: 400, statusMessage: '缺少 token' })
   if (!pointId) throw createError({ statusCode: 400, statusMessage: '缺少签到点位（pointId）' })
 
+  /** 多租户基址：租户学校必须用自己的域，否则上游查不到该校数据 */
+  const base = normalizeAllowedBase(body?.baseUrl, MP_HOST)
+
   // ① 提交前**重读一次**点位资料（吸取 E21/E33 的教训：绝不拿旧快照去写）
-  const { raw: taskRaw, point } = await fetchPoint({ snCode, token }, pointId)
+  const { raw: taskRaw, point } = await fetchPoint({ snCode, token, base }, pointId)
 
   /**
    * ①' **纵深防御：服务端侧复查时段**（2026-09-19 审计 M3）。
@@ -153,7 +159,7 @@ export default defineEventHandler(async (event) => {
   // ④ 发一次上游请求（**仅一次**；非幂等写操作，绝不重试）
   let rawText = ''
   try {
-    const res = await fetch(`${MP_HOST}${MP_ENDPOINTS.morningExercises.path}`, {
+    const res = await fetch(`${base}${MP_ENDPOINTS.morningExercises.path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json;charset=UTF-8', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ encryptParams }),
