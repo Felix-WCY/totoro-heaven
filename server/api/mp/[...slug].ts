@@ -25,6 +25,7 @@
  */
 import { MP_API_PREFIX, MP_HOST, MP_PATH_PREFIXES, MP_UPSTREAM_HEADER } from '../../../src/mp/types'
 import { summarizeUpstream } from '../../../utils/mp/logFormat'
+import { isAllowedUpstreamHost } from '../../utils/mpUpstream'
 import { RESP_BODY_MAX_BYTES, convergeLogLine, knownValuePairs, summarizeRespShape, summarizeResponseBody, unpackNote } from '../../../utils/mp/responseRecord'
 import { logError, logRawLine, summarizeRequestBody, logWarn } from '../../utils/logger'
 import { CAPTURE_MAX_BYTES, writeCapture } from '../../utils/captureStore'
@@ -34,52 +35,11 @@ import { fingerprintOf } from '../../utils/tokenScanState'
 //    `src/mp/constants.ts` 的 `MP_PATH_PREFIXES`（由 MP_API_PREFIX / MP_WXAPI_PREFIX 推导）。
 //    两处各写一份时，一旦不同步就会出现"某些端点被补错前缀"的隐蔽 bug。
 
-/** 🔒 允许的上游主机后缀（供应商自有域；见文件头"安全边界"） */
-const ALLOWED_UPSTREAM_SUFFIXES = ['xtotoro.com']
-
-/**
- * 🔒 允许的上游**精确主机**（各校独立租户域名）。
- *
- * ## 为什么需要这个（2026-10-23 拓展多学校时发现）
- * `getSunRunSchoolList`（免鉴权）实测返回 13 所学校、6 个域名 —— 其中 **5 所不在共享域**
- * `wxxcx.xtotoro.com` 上，而是各自的校方域名（如辽宁科技大学 `yanggpa.ustl.edu.cn`）。
- * 只放行 `xtotoro.com` 后缀 —— 但注意：**目前也只有共享域可用**（见下方 2026-10-23 实测）。
- */
-const ALLOWED_EXACT_HOSTS = new Set<string>([
-  // 🔴 2026-10-23 实测：这些独立域名的后端**不是同一套**（免鉴权端点返回 401/503），
-  //    所以**刻意留空** —— 不要把学校列表里的 domainUrl 直接塞进来。
-  //    要支持某所独立域名的学校，必须先按该校后端重新取证。
-])
-
-/**
- * 🔴 **上游白名单刻意保持静态**（2026-10-23 实测后的决定）。
- *
- * 曾尝试"从 `getSunRunSchoolList` 动态补充各校 `domainUrl`"，但实测发现
- * 那 5 个独立域名的后端**不是同一套**：
- *
- * | 主机 | getSunRunSchoolList | getSunRunFirstConfiguration |
- * | --- | --- | --- |
- * | wxxcx.xtotoro.com | 200 ✅ body[13] | 200 ✅ 正常 JSON |
- * | yanggpa.ustl.edu.cn | **401** | **401**（非 JSON，像网关/WAF） |
- * | sunnsport.zjyc.edu.cn 等 4 个 | **401 / 503** | **401** |
- *
- * ⇒ 放行它们只会让"明确的拒绝提示"变成"登录后读任务报 401"，对用户更糟。
- * 要支持某所独立域名的学校 = **先按该校后端重新取证**（不是改一行白名单的事）。
- */
-
 /**
  * 上游请求超时（毫秒）。
- * 取 20 秒：比本项目其余上游调用（15–20 秒）一致，且明显长于正常响应（实测多为 200–600 ms），
- * 只在"网络/校方接口真的卡住"时才触发，避免误杀慢响应。
+ * 取 40 秒：明显长于正常响应（实测多为 200–600 ms），只在"网络/校方接口真的卡住"时才触发。
  */
 const UPSTREAM_TIMEOUT_MS = 40_000
-
-/** 主机是否在白名单内（精确域名集合 ∪ `xtotoro.com` 及其子域） */
-const isAllowedUpstreamHost = (hostname: string): boolean => {
-  const host = hostname.toLowerCase()
-  if (ALLOWED_EXACT_HOSTS.has(host)) return true
-  return ALLOWED_UPSTREAM_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))
-}
 
 /** 解析请求体文本（坏 JSON / 空 ⇒ undefined）——「全记录」要从它取"已知敏感原值"的对照表 */
 const safeParseJson = (text: string | undefined): unknown => {
@@ -102,7 +62,11 @@ const normalizeBase = (raw: string | undefined | null, fallback: string): string
     const url = new URL(raw)
     if (url.protocol !== 'https:') return fallback // ① 绝不走明文 HTTP
     if (url.username || url.password) return fallback // ② 不允许带凭据
-    if (!isAllowedUpstreamHost(url.hostname)) return fallback // ③ 主机白名单
+    if (!isAllowedUpstreamHost(url.hostname)) {
+        // 🔴 绝不静默：白名单漏了哪个学校域名，曾经导致 4 轮排查（见 mpUpstream.ts 注释）
+        logWarn('mp-proxy', '上游主机不在白名单，已回落共享域', { host: url.hostname })
+        return fallback
+      } // ③ 主机白名单
     return `${url.origin}${url.pathname.replace(/\/$/, '')}`
   } catch {
     return fallback

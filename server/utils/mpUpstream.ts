@@ -17,6 +17,20 @@ import { KNOWN_SCHOOL_DOMAINS } from '../../utils/mp/schoolGate'
 const ALLOWED_SUFFIXES = ['xtotoro.com']
 
 /**
+ * 主机是否允许作为上游。
+ *
+ * ⚠️ 这个判断**必须可测**：2026-10-26 曾经因为白名单数组被一次静默失败的字符串替换
+ * 清空，导致所有租户请求静默回落到共享域、租户学生 token 全部被判「注册失败」，
+ * 排查了 4 轮。现在抽到这里并被 `tests/mp/upstreamAllowlist.test.ts` 钉住。
+ */
+export function isAllowedUpstreamHost(hostname: string): boolean {
+  const host = String(hostname ?? '').toLowerCase().trim()
+  if (!host) return false
+  if (KNOWN_SCHOOL_DOMAINS.includes(host)) return true
+  return ALLOWED_SUFFIXES.some((s) => host === s || host.endsWith(`.${s}`))
+}
+
+/**
  * 校验并归一化上游基址。
  * @param raw 调用方传入的基址（可能是 `https://host/`、`https://host`，也可能是空）
  * @param fallback 不合法/未传时返回的兜底值（通常是共享域）
@@ -34,9 +48,5 @@ export function normalizeAllowedBase(raw: unknown, fallback: string): string {
   // 必须 HTTPS（绝不把 token 以明文 HTTP 发出去）+ 不允许带凭据
   if (url.protocol !== 'https:') return fallback
   if (url.username || url.password) return fallback
-
-  const host = url.host.toLowerCase()
-  const exact = KNOWN_SCHOOL_DOMAINS.includes(host)
-  const suffixOk = ALLOWED_SUFFIXES.some((s) => host === s || host.endsWith(`.${s}`))
-  return exact || suffixOk ? `${url.protocol}//${url.host}` : fallback
+  return isAllowedUpstreamHost(url.host) ? `${url.protocol}//${url.host}` : fallback
 }
