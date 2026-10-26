@@ -227,6 +227,18 @@ export default defineEventHandler(async (event) => {
         ms: t0 - startedAt,
         bytes: text.length,
         auth: authFp,
+        /**
+         * 🆕 2026-10-26：**实际打到哪个上游主机**。
+         * 之前这里只记端点和响应，一旦 `normalizeBase()` 把租户域静默改写成共享域，
+         * 日志里完全看不出来（排查多学校问题时被这点卡了 4 轮）。
+         */
+        host: (() => {
+          try {
+            return new URL(base).host
+          } catch {
+            return base
+          }
+        })(),
         upstream,
         /** 🆕 响应**结构**摘要（只记键名与数组长度，不记值；**自带上限**） */
         ...(respShape ? { respShape } : {}),

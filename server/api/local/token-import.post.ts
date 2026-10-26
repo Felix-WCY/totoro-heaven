@@ -9,10 +9,11 @@
  */
 import { MP_ENDPOINTS, MP_HOST } from '../../../src/mp/types'
 import { judgeMpResponse, unwrapMpResponse } from '../../../src/mp/envelope'
-import { isTokenShape, maskToken, sanitizeCandidates } from '../../../utils/mp/tokenScan'
+import { maskToken, sanitizeCandidates } from '../../../utils/mp/tokenScan'
 import type { TokenScanProfile } from '../../utils/tokenScanState'
 import { assertLocalRequest, fingerprintOf, getScan, nonceMatches, patchScan } from '../../utils/tokenScanState'
 import { logInfo, logWarn } from '../../utils/logger'
+import { writeCapture } from '../../utils/captureStore'
 
 /**
  * 用候选 token 调 `GetStudentInfoByToken` 验活。
@@ -33,6 +34,7 @@ async function validateToken(
   token: string,
   base: string,
 ): Promise<{ profile: TokenScanProfile; base: string; token: string } | null> {
+  const startedAt = Date.now()
   try {
     const res = await fetch(`${base}${MP_ENDPOINTS.studentInfoByToken.path}`, {
       method: 'GET',
@@ -46,11 +48,50 @@ async function validateToken(
     const obj = unwrapMpResponse<Record<string, unknown>>(json, MP_ENDPOINTS.studentInfoByToken.payload)
     if (!obj?.snCode) return null
 
+    /**
+     * 📸 2026-10-26：给**成功**的验活响应留一份**仅结构**的档（不含任何字段值）。
+     *
+     * 动机：诊断包连续三次都是「验活成功 → 紧接着读取全灭」，但**成功的响应原文没有留档**
+     * （验活直连上游、不走代理，因此不经过捕获通道），无法判断服务端是否在成功响应里
+     * 换了 token / 有没有 token 字段。这里只记键名与 `token` 字段的形态，零 PII。
+     */
+    try {
+      const tokenField =
+        typeof json.token === 'string'
+          ? `string(len=${json.token.length},wxxcx=${json.token.startsWith('WXXCX')})`
+          : `type=${typeof json.token}`
+      writeCapture({
+        endpoint: `${MP_ENDPOINTS.studentInfoByToken.path} (验活成功·仅结构)`,
+        http: res.status,
+        ms: Date.now() - startedAt,
+        originalBytes: 0,
+        payload: {
+          kind: 'json',
+          body: {
+            viaHost: (() => {
+              try {
+                return new URL(base).host
+              } catch {
+                return base
+              }
+            })(),
+            topKeys: Object.keys(json).sort(),
+            objKeys: Object.keys(obj).sort(),
+            tokenField,
+            envelope: { status: json.status, code: json.code },
+          },
+        },
+        unpack: 'token-validate-shape',
+      })
+    } catch {
+      // 留档失败不影响验活
+    }
+
     /** 服务端可能下发新 token（形如 `WXXCX…`）；`null`/空/`"null"` 都视为没有 */
     const pickToken = (...cands: unknown[]): string => {
       for (const c of cands) {
         const s = typeof c === 'string' ? c.trim() : ''
-        if (s && s !== 'null' && isTokenShape(s)) return s
+        if (s && s !== 'null' && s !== 'undefined' && s.length >= 8) return s
       }
       return token
     }
