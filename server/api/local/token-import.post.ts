@@ -149,6 +149,8 @@ export default defineEventHandler(async (event) => {
           fingerprint: fingerprintOf(token),
           masked: maskToken(token),
           profile,
+          // 🔴 记住是哪个域名验活成功的 —— 后续读取必须先用它，否则租户学生的 token 会被判失效
+          baseUrl: base,
         })
         logInfo('token', 'token 验活成功', {
           candidates: candidates.length,

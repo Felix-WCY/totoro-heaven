@@ -25,6 +25,8 @@ export default defineEventHandler((event) => {
     fingerprint: st.fingerprint,
     masked: st.masked,
     profile: st.profile,
+    // 验活成功的上游基址（租户学校必须用它，不能回落共享域）
+    baseUrl: st.baseUrl,
     candidates: st.candidates,
     // 只有 ready 才给出 token；错误/进行中一律不给
     token: st.phase === 'ready' ? st.token : undefined,

@@ -93,9 +93,22 @@ function queueCameraFlag(id: string, force: boolean): void {
  * 顺序：**共享域优先**（多数学校在共享域，1 次请求命中），失败再逐个租户域。
  * 域名清单来自免鉴权接口 `getSunRunSchoolList`，拿不到就只试共享域（不阻断）。
  */
-async function readStudentInfoByAnyBase(token: string) {
-  /** `undefined` = 走默认基址（共享域） */
-  const bases: (string | undefined)[] = [undefined]
+async function readStudentInfoByAnyBase(token: string, preferred?: string) {
+  /**
+   * 顺序：**已知/验活成功的基址优先** → 共享域 → 各租户域。
+   *
+   * 🔴 优先项不能省：租户学生的 token 若先被发到共享域，会被服务端判「token失效，注册失败」，
+   * 而这次失败查询可能**连带把 token 判死** —— 2026-10-26 实测：同一 token 在
+   * `yanggpa.ustl.edu.cn` 验活成功后，紧接着被共享域的查询打成失效，之后 7 个域名全部失败。
+   */
+  const bases: (string | undefined)[] = []
+  const pushBase = (b: string | undefined) => {
+    const key = b ?? ''
+    if (bases.some((x) => (x ?? '') === key)) return
+    bases.push(b)
+  }
+  if (preferred) pushBase(preferred.replace(/\/+$/, ''))
+  pushBase(undefined)
   try {
     const list = await MpApiWrapper.fetchSchoolList({ token })
     if (list.ok && Array.isArray(list.data)) {
@@ -113,7 +126,7 @@ async function readStudentInfoByAnyBase(token: string) {
         }
         if (seen.has(normalized)) continue
         seen.add(normalized)
-        bases.push(normalized)
+        pushBase(normalized)
       }
     }
   } catch {
@@ -297,7 +310,7 @@ export function useMpRealData() {
     //    在共享域上会被判「token失效，**注册失败**」—— 共享域查不到该租户的学生。
     //    只走共享域会让"验活已成功"的 token 在这里又被判"过期"（用户截图就是这个现象）。
     //    顺序：共享域优先（多数学校在这个域，1 次请求命中）→ 再逐个租户域。
-    const info = await readStudentInfoByAnyBase(token)
+    const info = await readStudentInfoByAnyBase(token, session.value?.baseUrl)
     if (!info || !info.result.ok || !info.result.data?.snCode) {
       status.value = 'error'
       // token 过期/失效 → 给**可操作**提示（用户 2026-09-15 指定：提示退出登录并重新登录小程序）

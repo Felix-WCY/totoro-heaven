@@ -33,6 +33,14 @@ export interface TokenScanState {
   fingerprint?: string
   masked?: string
   profile?: TokenScanProfile
+  /**
+   * **验活成功的那个上游基址**（共享域 或 该校租户域）。
+   *
+   * 🔴 必须往下传：租户学生（如辽宁科技大学 `yanggpa.ustl.edu.cn`）的 token 只有在
+   * **该校域名**上才有效；若后续读取先打共享域，会把 token 判成「token失效，注册失败」。
+   * 2026-10-26 实测：同一 token 在 yanggpa 验活成功，紧接着被共享域的查询打成失效。
+   */
+  baseUrl?: string
   candidates?: number
   /** 该 nonce 是否已被 import 使用过（一次性） */
   used: boolean

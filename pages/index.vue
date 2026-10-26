@@ -406,6 +406,8 @@ const doTokenScan = async () => {
             masked?: string
             fingerprint?: string
             candidates?: number
+            /** 验活成功的上游基址（租户学校必须用它，回落共享域会让 token 被判失效） */
+            baseUrl?: string
           }>(`/api/local/token-scan/status?nonce=${encodeURIComponent(nonce)}`)
 
           tokenScanState.phase = st.phase
@@ -415,12 +417,19 @@ const doTokenScan = async () => {
             stopScanPolling()
             tokenScanState.masked = st.masked || ''
             // 写入会话（只存本机 localStorage）；随后自动读取真实数据
-            session.value = { token: st.token, baseUrl: session.value?.baseUrl ?? DEMO_SESSION.baseUrl, userInfo: session.value?.userInfo }
+            // 🔴 baseUrl 必须用**验活成功的那个域名**：租户学生（如辽宁科技大学
+            //    yanggpa.ustl.edu.cn）若先回落共享域，token 会被判「token失效，注册失败」。
+            session.value = {
+              token: st.token,
+              baseUrl: st.baseUrl || session.value?.baseUrl || DEMO_SESSION.baseUrl,
+              userInfo: session.value?.userInfo,
+            }
             tokenScanState.running = false
             logInfo('token', 'token 就绪，已写入会话', {
               masked: st.masked,
               fingerprint: st.fingerprint,
               candidates: st.candidates,
+              baseUrl: st.baseUrl,
             })
             showSnackbar(`已获取 token（${st.masked}），正在读取真实数据…`, 'success', { cloud: true })
             // 卸载后不再"替用户"建会话并读取真实数据（2026-09-20 审计修复）
