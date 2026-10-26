@@ -82,6 +82,55 @@ function queueCameraFlag(id: string, force: boolean): void {
   }, CAMERA_FLAG_DEBOUNCE_MS)
 }
 
+/**
+ * 在**所有学校域名**上依次尝试拉学生档案，命中即返回。
+ *
+ * 🔴 为什么不能只走共享域（2026-10-26 实测）：
+ *   租户学生（如辽宁科技大学 `yanggpa.ustl.edu.cn`）的 token 在共享域
+ *   `wxxcx.xtotoro.com` 上会被判「token失效，**注册失败**」——共享域里没有该租户的学生。
+ *   现象就是：验活已经成功、token 也拿到了，但"读取真实数据"这一步报「token 已过期/失效」。
+ *
+ * 顺序：**共享域优先**（多数学校在共享域，1 次请求命中），失败再逐个租户域。
+ * 域名清单来自免鉴权接口 `getSunRunSchoolList`，拿不到就只试共享域（不阻断）。
+ */
+async function readStudentInfoByAnyBase(token: string) {
+  /** `undefined` = 走默认基址（共享域） */
+  const bases: (string | undefined)[] = [undefined]
+  try {
+    const list = await MpApiWrapper.fetchSchoolList({ token })
+    if (list.ok && Array.isArray(list.data)) {
+      const seen = new Set<string>()
+      for (const s of list.data) {
+        const rawUrl = String(s.domainUrl ?? '').trim()
+        if (!rawUrl) continue
+        let normalized = rawUrl
+        try {
+          const u = new URL(rawUrl)
+          if (u.protocol !== 'https:') continue
+          normalized = `${u.protocol}//${u.host}`
+        } catch {
+          continue
+        }
+        if (seen.has(normalized)) continue
+        seen.add(normalized)
+        bases.push(normalized)
+      }
+    }
+  } catch {
+    // 拿不到清单就只试共享域
+  }
+
+  let last: Awaited<ReturnType<typeof MpApiWrapper.getStudentInfoByToken>> | null = null
+  for (let i = 0; i < bases.length; i++) {
+    const base = bases[i]
+    const result = await MpApiWrapper.getStudentInfoByToken(base ? { token, baseUrl: base } : { token })
+    const obj = result.data as Record<string, unknown> | null | undefined
+    if (result.ok && obj?.snCode) return { result, tried: i + 1 }
+    last = result
+  }
+  return { result: last as Awaited<ReturnType<typeof MpApiWrapper.getStudentInfoByToken>>, tried: bases.length }
+}
+
 export function useMpRealData() {
   // `setToken` 用于「恢复上次会话」时把缓存里的 token 写回会话（重建会话并落盘）
   const { session, clearSession, setToken } = useMpSession()
@@ -242,17 +291,23 @@ export function useMpRealData() {
     error.value = ''
     logInfo('real', '开始读取真实数据', { tokenLen: token.length })
 
-    // ① 先拉学生档案（此刻还不知道 schoolCode，走共享域；token 自身标识身份）
-    const info = await MpApiWrapper.getStudentInfoByToken({ token })
-    if (!info.ok || !info.data?.snCode) {
+    // ① 先拉学生档案（此刻还不知道 schoolCode，**所以要挨个学校域名试**）
+    //
+    // 🔴 2026-10-26 实测：租户学生（如辽宁科技大学 `yanggpa.ustl.edu.cn`）的 token
+    //    在共享域上会被判「token失效，**注册失败**」—— 共享域查不到该租户的学生。
+    //    只走共享域会让"验活已成功"的 token 在这里又被判"过期"（用户截图就是这个现象）。
+    //    顺序：共享域优先（多数学校在这个域，1 次请求命中）→ 再逐个租户域。
+    const info = await readStudentInfoByAnyBase(token)
+    if (!info || !info.result.ok || !info.result.data?.snCode) {
       status.value = 'error'
       // token 过期/失效 → 给**可操作**提示（用户 2026-09-15 指定：提示退出登录并重新登录小程序）
-      error.value = looksLikeTokenExpired(info.raw) ? TOKEN_EXPIRED_HINT : `读取学生档案失败：${info.message}`
-      if (looksLikeTokenExpired(info.raw)) logWarn('real', 'token 已过期/失效', { raw: info.message })
-      else logError('real', '读取学生档案失败', { message: info.message })
+      const rawMsg = info?.result.raw
+      error.value = looksLikeTokenExpired(rawMsg) ? TOKEN_EXPIRED_HINT : `读取学生档案失败：${info?.result.message ?? '所有学校域名均无响应'}`
+      if (looksLikeTokenExpired(rawMsg)) logWarn('real', 'token 已过期/失效', { tried: info?.tried ?? 0 })
+      else logError('real', '读取学生档案失败', { message: info?.result.message ?? '', tried: info?.tried ?? 0 })
       return false
     }
-    const raw = info.data as Record<string, unknown>
+    const raw = info.result.data as Record<string, unknown>
     const schoolCode = String(raw.schoolCode ?? '')
 
     // ② 按**真实 schoolCode** 解析该校基址（多租户），校验是否**已知学校域名**
