@@ -14,13 +14,19 @@ import type { TokenScanProfile } from '../../utils/tokenScanState'
 import { assertLocalRequest, fingerprintOf, getScan, nonceMatches, patchScan } from '../../utils/tokenScanState'
 import { logInfo, logWarn } from '../../utils/logger'
 
-/** 用候选 token 调 GetStudentInfoByToken 验活；有效返回档案摘要，否则 null */
-async function validateToken(token: string): Promise<TokenScanProfile | null> {
+/**
+ * 用候选 token 调 `GetStudentInfoByToken` 验活；有效返回档案摘要，否则 null。
+ *
+ * ⚠️ `base` 必须是**该校自己的域名**：租户学生（如辽宁科技大学 `yanggpa.ustl.edu.cn`）
+ * 的 token 在共享域上会被判「token失效，注册失败」（共享域找不到该租户的学生）。
+ * 2026-10-26 实测：辽科大用户扫到 6 个候选全部验活失败，就是这个原因。
+ */
+async function validateToken(token: string, base: string): Promise<TokenScanProfile | null> {
   try {
-    const res = await fetch(`${MP_HOST}${MP_ENDPOINTS.studentInfoByToken.path}`, {
+    const res = await fetch(`${base}${MP_ENDPOINTS.studentInfoByToken.path}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json;charset=UTF-8', Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(8000),
     })
     const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
     if (!json) return null
@@ -36,6 +42,41 @@ async function validateToken(token: string): Promise<TokenScanProfile | null> {
   } catch {
     return null
   }
+}
+
+/**
+ * 验活要试哪些基址：**共享域优先，再逐个租户域**。
+ *
+ * 学校列表（免鉴权）一次就能拿到全部域名，实测 13 所学校分布在 6 个域名上。
+ * 拿不到列表时退回只用共享域（老行为，不影响共享域学校）。
+ */
+async function candidateBases(): Promise<string[]> {
+  const bases = [MP_HOST.replace(/\/+$/, '')]
+  try {
+    const res = await fetch(`${MP_HOST}/wxapi/platform/active/getSunRunSchoolList`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(8000),
+    })
+    const json = (await res.json()) as { body?: Array<{ domainUrl?: string }> }
+    for (const s of json.body ?? []) {
+      const raw = String(s.domainUrl ?? '').trim()
+      if (!raw) continue
+      let normalized = raw
+      try {
+        const u = new URL(raw)
+        if (u.protocol !== 'https:') continue
+        normalized = `${u.protocol}//${u.host}`
+      } catch {
+        continue
+      }
+      if (!bases.includes(normalized)) bases.push(normalized)
+    }
+  } catch {
+    // 拿不到列表就用共享域，不阻断
+  }
+  return bases
 }
 
 export default defineEventHandler(async (event) => {
@@ -89,35 +130,54 @@ export default defineEventHandler(async (event) => {
   }
 
   logInfo('token', `扫描到 ${candidates.length} 个候选，开始逐个验活`, { candidates: candidates.length })
+  /**
+   * 多域名验活（2026-10-26）：**按 token 为主序**，每个 token 依次试共享域 → 各租户域。
+   * 这样最常见的情况（共享域学生、有效 token 排在前面）只需 1 次请求就能命中。
+   * 总预算 20 秒，超时就停（避免界面一直转圈）。
+   */
+  const bases = await candidateBases()
+  const deadline = Date.now() + 20_000
   for (const token of candidates) {
-    const profile = await validateToken(token)
-    if (profile) {
-      patchScan({
-        phase: 'ready',
-        message: 'token 已就绪',
-        token,
-        fingerprint: fingerprintOf(token),
-        masked: maskToken(token),
-        profile,
-      })
-      logInfo('token', 'token 验活成功', {
-        candidates: candidates.length,
-        fingerprint: fingerprintOf(token),
-        campus: profile.campus,
-        school: profile.schoolName,
-      })
-      return { ok: true, validated: 1, candidates: candidates.length }
+    for (const base of bases) {
+      if (Date.now() > deadline) break
+      const profile = await validateToken(token, base)
+      if (profile) {
+        patchScan({
+          phase: 'ready',
+          message: 'token 已就绪',
+          token,
+          fingerprint: fingerprintOf(token),
+          masked: maskToken(token),
+          profile,
+        })
+        logInfo('token', 'token 验活成功', {
+          candidates: candidates.length,
+          fingerprint: fingerprintOf(token),
+          campus: profile.campus,
+          school: profile.schoolName,
+          // 用哪所学校的域验活的（只记 host，不含 token）
+          viaHost: (() => {
+            try {
+              return new URL(base).host
+            } catch {
+              return ''
+            }
+          })(),
+        })
+        return { ok: true, validated: 1, candidates: candidates.length }
+      }
     }
+    if (Date.now() > deadline) break
   }
 
   patchScan({
     phase: 'error',
     message:
-      `扫到 ${candidates.length} 个候选，但都没通过验活（多半是内存里残留的旧串）。` +
+      `扫到 ${candidates.length} 个候选，但都没通过验活（已尝试 ${bases.length} 个学校域名）。` +
       '请在「龙猫校园（龙猫体育锻炼）」小程序里【退出登录】→ 用「学号 + 姓名」重新登录 → ' +
       '「保持小程序窗口开着」→ 回到本页再点一次「一键获取 token」。' +
       '（等价且更稳：在微信里删除该小程序→重新打开→登录；两者都会解除微信绑定，请确认记得学号）',
   })
-  logWarn('token', '候选都没通过验活', { candidates: candidates.length })
+  logWarn('token', '候选都没通过验活', { candidates: candidates.length, bases: bases.length })
   return { ok: true, validated: 0, candidates: candidates.length }
 })

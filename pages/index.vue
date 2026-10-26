@@ -24,11 +24,11 @@
       <template #prepend>
         <v-icon>mdi-shield-check-outline</v-icon>
       </template>
-      <div class="font-weight-bold">支持范围：共享域 + 无风控校验的学校（运行时自动判定）</div>
+      <div class="font-weight-bold">支持范围：厂商学校列表内的学校 + 无风控校验（运行时自动判定）</div>
       <div class="text-body-2">
         只要同时满足两点即可使用：<br />
-        ① 学校与南航<b>共享同一个 API 域</b>（<code>wxxcx.xtotoro.com</code>）——
-        独立域/学校专属小程序的学校<b>不支持</b>（那等于另一套后端）；<br />
+        ① 学校在厂商<b>学校列表</b>内 —— 共享域（<code>wxxcx.xtotoro.com</code>）或各校
+        <b>独立租户域</b>（如辽宁科技大学 <code>yanggpa.ustl.edu.cn</code>）均可，程序会自动识别；<br />
         ② 该校<b>未开启</b>开场人脸 / 随机抽查 / 摄像头杆校验 ——
         任一开启时门禁会<b>在创建场次前阻止</b>，不会留下无效记录。<br />
         <span class="text-caption">
