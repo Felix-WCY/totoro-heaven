@@ -9,19 +9,30 @@
  */
 import { MP_ENDPOINTS, MP_HOST } from '../../../src/mp/types'
 import { judgeMpResponse, unwrapMpResponse } from '../../../src/mp/envelope'
-import { maskToken, sanitizeCandidates } from '../../../utils/mp/tokenScan'
+import { isTokenShape, maskToken, sanitizeCandidates } from '../../../utils/mp/tokenScan'
 import type { TokenScanProfile } from '../../utils/tokenScanState'
 import { assertLocalRequest, fingerprintOf, getScan, nonceMatches, patchScan } from '../../utils/tokenScanState'
 import { logInfo, logWarn } from '../../utils/logger'
 
 /**
- * 用候选 token 调 `GetStudentInfoByToken` 验活；有效返回档案摘要，否则 null。
+ * 用候选 token 调 `GetStudentInfoByToken` 验活。
  *
  * ⚠️ `base` 必须是**该校自己的域名**：租户学生（如辽宁科技大学 `yanggpa.ustl.edu.cn`）
- * 的 token 在共享域上会被判「token失效，注册失败」（共享域找不到该租户的学生）。
- * 2026-10-26 实测：辽科大用户扫到 6 个候选全部验活失败，就是这个原因。
+ * 的 token 在共享域上会被判「token失效，注册失败」。
+ *
+ * 🔴 **验活会消耗旧 token**（2026-10-26 诊断包实测）：
+ *    同一 token 在 `yanggpa` 验活成功后 **~1 秒**，用它再调同一个端点就变成
+ *    「token失效，注册失败」，之后 7 个域名全部失败。
+ *    该接口的响应是**带顶层 `token` 字段的**（学校列表接口同样有），
+ *    说明服务端在认证成功时**下发新 token、旧 token 立即作废**。
+ *    ⇒ 必须把响应里的新 token 一路传下去，否则后续请求必然全灭。
+ *
+ * @returns 命中时返回档案摘要 + 实际基址 + **可用的 token**（可能是服务端新发的）
  */
-async function validateToken(token: string, base: string): Promise<TokenScanProfile | null> {
+async function validateToken(
+  token: string,
+  base: string,
+): Promise<{ profile: TokenScanProfile; base: string; token: string } | null> {
   try {
     const res = await fetch(`${base}${MP_ENDPOINTS.studentInfoByToken.path}`, {
       method: 'GET',
@@ -34,10 +45,25 @@ async function validateToken(token: string, base: string): Promise<TokenScanProf
     if (!verdict.ok) return null
     const obj = unwrapMpResponse<Record<string, unknown>>(json, MP_ENDPOINTS.studentInfoByToken.payload)
     if (!obj?.snCode) return null
+
+    /** 服务端可能下发新 token（形如 `WXXCX…`）；`null`/空/`"null"` 都视为没有 */
+    const pickToken = (...cands: unknown[]): string => {
+      for (const c of cands) {
+        const s = typeof c === 'string' ? c.trim() : ''
+        if (s && s !== 'null' && isTokenShape(s)) return s
+      }
+      return token
+    }
+    const fresh = pickToken(json.token, obj.token)
+
     return {
-      snCode: String(obj.snCode),
-      schoolName: obj.schoolName ? String(obj.schoolName) : '',
-      campus: obj.schoolCampusName ? String(obj.schoolCampusName) : '',
+      profile: {
+        snCode: String(obj.snCode),
+        schoolName: obj.schoolName ? String(obj.schoolName) : '',
+        campus: obj.schoolCampusName ? String(obj.schoolCampusName) : '',
+      },
+      base,
+      token: fresh,
     }
   } catch {
     return null
@@ -140,27 +166,35 @@ export default defineEventHandler(async (event) => {
   for (const token of candidates) {
     for (const base of bases) {
       if (Date.now() > deadline) break
-      const profile = await validateToken(token, base)
-      if (profile) {
+      const hit = await validateToken(token, base)
+      if (hit) {
+        /**
+         * 🔴 用**服务端下发的 token**（`hit.token`），不是候选里的那个。
+         * 该端点认证成功时会换发新 token、把旧的立即作废；继续用旧的 ⇒ 后续请求全灭
+         * （2026-10-26 诊断包：验活成功后 ~1 秒，同一域名再查就「token失效」）。
+         */
+        const sessionToken = hit.token
+        const rotated = sessionToken !== token
         patchScan({
           phase: 'ready',
           message: 'token 已就绪',
-          token,
-          fingerprint: fingerprintOf(token),
-          masked: maskToken(token),
-          profile,
-          // 🔴 记住是哪个域名验活成功的 —— 后续读取必须先用它，否则租户学生的 token 会被判失效
-          baseUrl: base,
+          token: sessionToken,
+          fingerprint: fingerprintOf(sessionToken),
+          masked: maskToken(sessionToken),
+          profile: hit.profile,
+          // 记住是哪个域名验活成功的 —— 后续读取必须先用它，否则租户学生的 token 会被判失效
+          baseUrl: hit.base,
         })
         logInfo('token', 'token 验活成功', {
           candidates: candidates.length,
-          fingerprint: fingerprintOf(token),
-          campus: profile.campus,
-          school: profile.schoolName,
-          // 用哪所学校的域验活的（只记 host，不含 token）
+          fingerprint: fingerprintOf(sessionToken),
+          campus: hit.profile.campus,
+          school: hit.profile.schoolName,
+          // 服务端是否换发了新 token（只记布尔，不记值）
+          rotated,
           viaHost: (() => {
             try {
-              return new URL(base).host
+              return new URL(hit.base).host
             } catch {
               return ''
             }
