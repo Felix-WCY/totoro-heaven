@@ -230,6 +230,36 @@ function centerOnUserIfNoGeometry() {
   }, 500)
 }
 
+/**
+ * 🆕 2026-10-27（客户反馈「这卫星图不对 / 这都不是我这地方」）：
+ * **首屏优先落在已知几何上**，而不是只等浏览器定位。
+ *
+ * 取值顺序：
+ *   ① 本任务**所有官方线路**的点列（= 整所学校所有操场的包围盒）——厂商点列里的坐标常是字符串
+ *      （`"32.032922"`），`num()` 统一转数字；之前 `schoolCenter` 只认 number，字符串全被丢掉，
+ *      于是「跑道编辑」退回浏览器定位；桌面端/定位失败时地图停在甘肃的中性默认点。
+ *   ② 本机已保存的路径形状（老用户画过就有）。
+ *   ③ 都没有才去问浏览器位置（`centerOnUserIfNoGeometry`，定位失败保持现状，用户可点「定位」）。
+ */
+function centerOnSchoolOrSavedGeometry(): boolean {
+  const pts: N[] = []
+  for (const line of activeLines.value) {
+    for (const p of (line.pointList ?? []) as unknown as P[]) {
+      const n = num(p)
+      if (Number.isFinite(n.latitude) && Number.isFinite(n.longitude)) pts.push(n)
+    }
+  }
+  if (pts.length >= 2) {
+    focusOn(pts)
+    return true
+  }
+  if (freeShapePath.value.length >= 2) {
+    focusOn(freeShapePath.value)
+    return true
+  }
+  return false
+}
+
 onMounted(() => {
   /**
    * 🆕 2026-09-22（真实用户实测）：**先从本机缓存把任务恢复回来**，再读路线库。
@@ -240,13 +270,17 @@ onMounted(() => {
   lib.load()
   onResize()
   window.addEventListener('resize', onResize)
-  centerOnUserIfNoGeometry()
   /**
    * 把这条本机记录上**已经保存的形状**填进草稿（没有就停在"先选形状"）。
    * ⚠️ 只在挂载时读一次：保存后记录会变，若跟着 watch 重灌草稿会把用户
    *    正在填的趟数/正在画的草稿冲掉。
    */
   loadFreeDraft(lib.get(LOCAL_FREE_LINE_ID)?.freeShape)
+  /**
+   * 🆕 2026-10-27：先按学校/本机形状落图；都没有才去申请浏览器定位。
+   * （顺序不能反：定位在桌面端/国内网络经常失败，先定位会把学校几何的定位机会让掉。）
+   */
+  if (!centerOnSchoolOrSavedGeometry()) centerOnUserIfNoGeometry()
   /**
    * 🆕 2026-09-23（pre3，用户要求"一键跳转"）：从跑步页的「一键去画一条本机路径」进来时带 `?draw=curve`
    * ⇒ **自动进入"圈型"绘制模式**（用户点一下就能开始画，不用自己找形状按钮）。

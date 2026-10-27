@@ -34,16 +34,16 @@
       </v-alert>
 
       <v-divider class="my-3" />
-      <div class="text-caption text-medium-emphasis mb-2">一票否决项（真实数据读取后自动查）</div>
+      <div class="text-caption text-medium-emphasis mb-2">开跑校验项（真实数据读取后自动查）</div>
       <v-list density="compact">
         <v-list-item
           title="开场人脸 sunrunStartFace"
-          :subtitle="switchText(realSwitches?.sunrunStartFace, '开启（需实时拍脸）', '关闭')"
+          :subtitle="switchText(realSwitches?.sunrunStartFace, '开启（需实时拍脸，网页做不了）', '关闭')"
           prepend-icon="mdi-camera-outline"
         />
         <v-list-item
           title="随机抽查 sunrunPointRandom"
-          :subtitle="switchText(realSwitches?.sunrunPointRandom, '开启（跑动中可能弹脸）', '关闭')"
+          :subtitle="switchText(realSwitches?.sunrunPointRandom, '开启（仅提示；刷跑一般不触发）', '关闭')"
           prepend-icon="mdi-shuffle-variant"
         />
         <v-list-item
@@ -67,8 +67,14 @@
           重新读取该线路的开关
         </v-btn>
       </v-alert>
+      <v-alert v-else-if="gateStatus.warnings.length" type="warning" variant="tonal" density="compact" class="mt-2">
+        <div class="font-weight-bold">⚠️ 开跑前门禁通过（但有提示）</div>
+        <ol class="text-body-2 pl-4 mt-1 mb-0">
+          <li v-for="(w, i) in gateStatus.warnings" :key="`home-gate-warn-${i}`">{{ w }}</li>
+        </ol>
+      </v-alert>
       <v-alert v-else type="success" variant="tonal" density="compact" class="mt-2">
-        ✅ 开跑前门禁通过：三项（开场人脸 / 随机抽查 / 摄像头杆）均无阻碍。
+        ✅ 开跑前门禁通过：开场人脸未开启，随机抽查/摄像头杆无阻碍。
       </v-alert>
     </v-card-text>
   </v-card>

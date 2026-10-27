@@ -4,6 +4,7 @@
   "description": "Totoro Paradise —— 阳光跑助手（微信小程序后端线）",
   "private": true,
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "nuxt dev",
     "build": "nuxt build",
@@ -17,6 +18,8 @@
     "selftest:wiring": "node scripts/selftest-check-wiring.mjs",
     "verify": "npm run test:mp && npm run typecheck:mp && npm run typecheck:ui && npm run typecheck:vue && npm run check:wiring && npm run selftest:wiring",
     "sea": "powershell -NoProfile -ExecutionPolicy Bypass -File pack/sea/build-sea.ps1",
+    "electron": "electron .",
+    "electron:build": "powershell -NoProfile -ExecutionPolicy Bypass -File pack/electron/build-electron.ps1",
     "build:issuer": "node tools/license-issuer/build-issuer.mjs",
     "activation": "node tools/activation-server/server.mjs"
   },
@@ -29,6 +32,8 @@
   "devDependencies": {
     "@mdi/font": "^7.4.47",
     "@types/node": "^20.11.30",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
     "nuxi": "^3.10.0",
     "postject": "^1.0.0-alpha.6",
@@ -39,5 +44,47 @@
     "typescript": "^5.4.5",
     "vue-tsc": "^2.0.29",
     "vuetify": "^3.5.15"
+  },
+  "build": {
+    "appId": "com.totoro.heaven",
+    "productName": "龙猫天堂",
+    "asar": true,
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "dist/electron",
+      "buildResources": "pack/electron"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".output",
+        "to": "output"
+      },
+      {
+        "from": "logo.ico",
+        "to": "logo.ico"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "logo.ico",
+      "artifactName": "totoro-heaven-${version}-portable.${ext}"
+    },
+    "portable": {
+      "requestExecutionLevel": "user"
+    }
   }
 }

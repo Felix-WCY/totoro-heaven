@@ -297,6 +297,18 @@ export function evaluateRunGate(input: RunGateInput): RunGateResult {
   const relax = input.relaxGate ?? RELAX_GATE_FOR_CAPTURE
   const hits: { code: RunGateBlockCode; reason: string }[] = []
   const hit = (code: RunGateBlockCode, reason: string) => hits.push({ code, reason })
+  /**
+   * 🆕 2026-10-27（真实客户反馈）：**「随机抽查」开关不再直接拦截**，只给一条提示。
+   *
+   * 用户实测口径：`sunrunPointRandom=1` 不等于"跑动中一定会弹脸"——刷跑不经过小程序的人脸流程，
+   * 这个开关拦下来会让整所学校/整类任务都做不了（辽宁科技大学客户就是被这条挡住的），
+   * 而实际提交时是否弹脸由厂商决定，我们并不真的去跑小程序。
+   * ⇒ 改成 `soft`：`allow` 仍为 true，但**必须**在界面显示一条醒目提示（`warnings` 里带上），
+   *    万一真弹脸 / 被判无效，用户知道原因，诊断包也能看到这条。
+   * ⚠️ 「开场人脸」（`sunrunStartFace=1`）仍是**硬拦截**：那是开跑前就必须实时拍摄的，网页确实做不了。
+   */
+  const soft: { code: RunGateBlockCode; reason: string }[] = []
+  const softWarn = (code: RunGateBlockCode, reason: string) => soft.push({ code, reason })
   /** "不拦、但要说一句"的信息（如自由路线任务"无需选择线路"）——与 warnings 分开：它不是"本该拦住"的理由 */
   let info = ''
 
@@ -320,11 +332,12 @@ export function evaluateRunGate(input: RunGateInput): RunGateResult {
           '本任务「开场人脸校验」已开启（sunrunStartFace=1）：需要实时拍摄，网页无法完成 —— 已停止，未创建场次。',
         )
       }
-      // ③ 随机人脸抽查
+      // ③ 随机人脸抽查（🆕 2026-10-27：只提示、不拦截 —— 刷跑不经过小程序，通常不会真弹脸）
       if (String(input.switches.sunrunPointRandom ?? '') === '1') {
-        hit(
+        softWarn(
           'point_random',
-          '本任务「随机人脸抽查」已开启（sunrunPointRandom=1）：跑动中会弹脸，网页无法完成 —— 已停止，未创建场次。',
+          '本任务「随机人脸抽查」开关为开启（sunrunPointRandom=1）：刷跑不经过小程序、通常不会真的弹脸，' +
+            '所以本次**不再直接拦截**。但若跑动中真的弹出人脸/被判无效，这笔记录可能作废 —— 请知悉后再决定是否开跑。',
         )
       }
     }
@@ -366,9 +379,14 @@ export function evaluateRunGate(input: RunGateInput): RunGateResult {
     }
   }
 
-  const warningCodes = hits.map((h) => h.code)
-  const warnings = hits.map((h) => h.reason)
-  if (!hits.length) return { allow: true, reason: info, warnings: [], warningCodes: [], relaxed: false }
+  /**
+   * ⚠️ `warnings` 里既有"真会拦"的命中项，也有**只提示**的软项（目前只有 `point_random`）。
+   * 严格模式 / 放宽模式都按同一口径返回；`allow` 只由 hits 决定。
+   * 软项必须让界面看到（`warningCodes` 里也带上），否则就等于悄悄忽略。
+   */
+  const warnings = [...hits.map((h) => h.reason), ...soft.map((s) => s.reason)]
+  const warningCodes = [...hits.map((h) => h.code), ...soft.map((s) => s.code)]
+  if (!hits.length) return { allow: true, reason: info, warnings, warningCodes, relaxed: false }
 
   /**
    * 🔴 pre3 采数据期：命中项**只警告、不阻断** —— `allow` 仍为 true，界面必须把 `warnings` 如实展示，

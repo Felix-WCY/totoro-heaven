@@ -25,11 +25,41 @@ export interface LatLngLike {
   longitude: number
 }
 
-/** 一组点的包围盒中心（点不足 2 个返回 null） */
-export function centerOfPoints(points: readonly LatLngLike[] | null | undefined): LatLngLike | null {
-  const pts = (points ?? []).filter(
-    (p) => p && Number.isFinite(p.latitude) && Number.isFinite(p.longitude),
-  )
+/** 契约层坐标：厂商下发的点列里 latitude/longitude **可能是字符串**（实测 `"32.032922"`） */
+export interface LatLngInput {
+  latitude: number | string
+  longitude: number | string
+}
+
+/** 把一个坐标分量收敛成有限数字；空串/非数字/NaN 一律返回 null（不猜） */
+function finiteCoord(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return null
+    const n = Number(text)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+/**
+ * 一组点的包围盒中心（点不足 2 个返回 null）。
+ *
+ * ⚠️ **必须接受字符串坐标**（2026-10-27 真实故障）：厂商接口下发的是 `"32.032922"` 这种字符串，
+ * 原实现用 `Number.isFinite(p.latitude)` 过滤 ⇒ 字符串全部被丢掉 ⇒ `schoolCenter()` 返回 null ⇒
+ * 「跑道编辑」打开时退回浏览器定位；桌面端/定位失败时地图停在甘肃的中性默认点，
+ * 用户看到的就是「这卫星图不对 / 这都不是我这地方」。
+ */
+export function centerOfPoints(points: readonly LatLngInput[] | null | undefined): LatLngLike | null {
+  const pts: LatLngLike[] = []
+  for (const p of points ?? []) {
+    if (!p) continue
+    const latitude = finiteCoord(p.latitude)
+    const longitude = finiteCoord(p.longitude)
+    if (latitude === null || longitude === null) continue
+    pts.push({ latitude, longitude })
+  }
   if (pts.length < 2) return null
   const lats = pts.map((p) => p.latitude)
   const lngs = pts.map((p) => p.longitude)
@@ -57,7 +87,7 @@ export interface MapSpot {
  * @returns 有坐标的场地列表（顺序与下发一致；没有坐标的线路会被跳过）
  */
 export function schoolMapSpots(
-  lines: readonly { pointName?: unknown; pointList?: readonly LatLngLike[] }[] | null | undefined,
+  lines: readonly { pointName?: unknown; pointList?: readonly LatLngInput[] }[] | null | undefined,
 ): MapSpot[] {
   const out: MapSpot[] = []
   for (const [i, line] of (lines ?? []).entries()) {
@@ -74,10 +104,10 @@ export function schoolMapSpots(
  * 用于"打开就先落在学校"——而不是落在某一条被选中的线路上。
  */
 export function schoolCenter(
-  lines: readonly { pointList?: readonly LatLngLike[] }[] | null | undefined,
+  lines: readonly { pointList?: readonly LatLngInput[] }[] | null | undefined,
 ): LatLngLike | null {
-  const all: LatLngLike[] = []
-  for (const line of lines ?? []) all.push(...((line?.pointList ?? []) as LatLngLike[]))
+  const all: LatLngInput[] = []
+  for (const line of lines ?? []) all.push(...((line?.pointList ?? []) as LatLngInput[]))
   return centerOfPoints(all)
 }
 

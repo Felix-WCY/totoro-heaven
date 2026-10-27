@@ -156,10 +156,31 @@ test('门禁：开场人脸开启 → 拒绝且不创建场次', () => {
   assert.match(r.reason, /未创建场次/)
 })
 
-test('门禁：随机抽查开启 → 拒绝', () => {
+/**
+ * 🆕 2026-10-27（真实客户反馈）：**随机抽查开关只提示、不拦截**。
+ *
+ * 依据（用户/客户口径 + 诊断包）：`sunrunPointRandom=1` 只说明学校开了这个开关，
+ * 实际刷跑不经过小程序的人脸流程，通常不会真弹脸；之前把它当"一票否决"直接终止，
+ * 导致辽宁科技大学这类任务整所学校都用不了（客户原话「这个只要开场人脸，不是随机抽查的」）。
+ * 现在：放行 + 一条醒目提示（若真弹脸/判无效，记录可能作废，用户自行决定）。
+ */
+test('门禁：随机抽查开启 → **只提示、不拦截**（不能再直接终止）', () => {
   const r = evaluateRunGate(base({ switches: { sunrunStartFace: '0', sunrunPointRandom: '1' } }))
-  assert.equal(r.allow, false)
-  assert.equal(r.blockedBy, 'point_random')
+  assert.equal(r.allow, true, 'sunrunPointRandom=1 不得再直接阻止提交')
+  assert.equal(r.blockedBy, undefined, '没有硬命中项 ⇒ blockedBy 不填')
+  assert.ok(r.warningCodes.includes('point_random'), '但必须留下一条 point_random 提示')
+  assert.match(r.warnings.join('\n'), /随机人脸抽查/)
+  assert.match(r.warnings.join('\n'), /不再直接拦截/)
+})
+
+test('门禁：开场人脸**仍然硬拦**（与随机抽查无关；两项同时开也先拦开场人脸）', () => {
+  const onlyStart = evaluateRunGate(base({ switches: { sunrunStartFace: '1', sunrunPointRandom: '0' } }))
+  assert.equal(onlyStart.allow, false)
+  assert.equal(onlyStart.blockedBy, 'start_face')
+  const both = evaluateRunGate(base({ switches: { sunrunStartFace: '1', sunrunPointRandom: '1' } }))
+  assert.equal(both.allow, false)
+  assert.equal(both.blockedBy, 'start_face')
+  assert.ok(both.warningCodes.includes('point_random'), '软提示仍要一起展示')
 })
 
 test('门禁：摄像头杆开启 → 拒绝', () => {
@@ -206,17 +227,16 @@ test('门禁：任务未下发线路（lineRequired=false）⇒ 未选线路**�
   assert.doesNotMatch(r.reason, /不判路线/)
 })
 
-test('门禁：lineRequired=false **只**放宽"线路"这一条 —— 夜间/开关/人脸/抽查照旧拦', () => {
+test('门禁：lineRequired=false **只**放宽"线路"这一条 —— 夜间/开关/开场人脸照旧拦；随机抽查只提示', () => {
   const noLine = { line: null, cameraFlag: null, cameraFlagLineId: '', lineRequired: false } as const
   assert.equal(evaluateRunGate(base({ ...noLine, switches: null })).blockedBy, 'switches_unknown', '开关未读照旧拦')
   assert.equal(
     evaluateRunGate(base({ ...noLine, switches: { sunrunStartFace: '1', sunrunPointRandom: '0' } })).blockedBy,
     'start_face',
   )
-  assert.equal(
-    evaluateRunGate(base({ ...noLine, switches: { sunrunStartFace: '0', sunrunPointRandom: '1' } })).blockedBy,
-    'point_random',
-  )
+  const randomOnly = evaluateRunGate(base({ ...noLine, switches: { sunrunStartFace: '0', sunrunPointRandom: '1' } }))
+  assert.equal(randomOnly.allow, true, '随机抽查只提示、不拦（2026-10-27 口径）')
+  assert.ok(randomOnly.warningCodes.includes('point_random'))
   assert.equal(
     evaluateRunGate(base({ ...noLine, now: new Date(2026, 8, 16, 22, 30, 0) })).blockedBy,
     'night',
@@ -265,7 +285,7 @@ test('🔴 pre3 放宽：同一条输入在严格模式下 allow=false、放宽�
     { name: '夜间停用', input: { now: new Date(2026, 8, 16, 23, 0, 0) }, code: 'night' },
     { name: '开关未读', input: { switches: null }, code: 'switches_unknown' },
     { name: '开场人脸', input: { switches: { sunrunStartFace: '1', sunrunPointRandom: '0' } }, code: 'start_face' },
-    { name: '随机抽查', input: { switches: { sunrunStartFace: '0', sunrunPointRandom: '1' } }, code: 'point_random' },
+    // ⚠️ 随机抽查（point_random）已改为"只提示不拦"（2026-10-27）⇒ 不在本表里
     { name: '未选线路', input: { line: null, cameraFlagLineId: '' }, code: 'camera_unknown' },
     { name: '摄像头杆未读', input: { cameraFlag: null }, code: 'camera_unknown' },
     { name: '摄像头杆已开', input: { cameraFlag: true }, code: 'camera_on' },

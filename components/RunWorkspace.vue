@@ -834,6 +834,20 @@
         <div v-if="cameraFlagError" class="text-caption mt-1">读取异常：{{ cameraFlagError }}</div>
       </v-alert>
 
+      <!-- 🆕 2026-10-27：允许放行、但仍有"只提示"的软项（目前是随机抽查开关）⇒ 必须醒目告知，不能悄悄忽略 -->
+      <v-alert
+        v-else-if="gateWarnings.length"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-2"
+      >
+        <div class="font-weight-bold">开跑提示（不拦截本次提交）</div>
+        <ol class="text-body-2 pl-4 mt-1 mb-0">
+          <li v-for="(w, i) in gateWarnings" :key="`gate-soft-${i}`">{{ w }}</li>
+        </ol>
+      </v-alert>
+
       <!--
         🆕 2026-09-24（pre3 连带修复）："重新读取该线路的开关"入口已搬到页面最上面常驻（见文件开头）——
         原先放在这里时有两个坑：① pre3 放宽后 `allow` 恒 true ⇒ 上面那张"已阻止真实提交"的卡不出现 ⇒ 入口消失；

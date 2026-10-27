@@ -1,11 +1,19 @@
 # Build the totoro-heaven single-file EXE (Node SEA)
 # Usage: .\pack\sea\build-sea.ps1
+#        .\pack\sea\build-sea.ps1 -PrepareOnly   (only prepare .output, skip the SEA packaging steps)
 # It verifies that .output is a clean production build and rebuilds automatically when the output
 # is missing or polluted by dev artifacts (a dev/empty output packed into the EXE => blank page).
+#
+# -PrepareOnly exists so the Electron build (pack/electron/build-electron.ps1) can reuse the SAME
+# .output preparation rules (clean/stale checks, version-art trim, source-map strip) instead of
+# duplicating them. With no arguments this script behaves exactly as before.
 #
 # NOTE: keep this file **pure ASCII** (project rule / ERROR.md E3, E14). PowerShell 5.1 reads a
 # UTF-8 file WITHOUT BOM as ANSI, so non-ASCII comments get mangled and can swallow the code line
 # that follows them (2026-09-18: adding Chinese comments here nulled $outputDir and broke the build).
+param(
+    [switch]$PrepareOnly
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
@@ -219,6 +227,11 @@ if ($mapLeft.Count -ne 0) {
     throw "[0.7] source-map strip failed: $($mapLeft.Count) .map file(s) still under .output"
 }
 Write-Host "[0.7] source maps stripped: removed $($mapFiles.Count) .map file(s) from .output (the EXE never reads them)."
+
+if ($PrepareOnly) {
+    Write-Host '[prepare-only] .output is prepared for packaging; skipping SEA steps [1/7]..[7/7].'
+    exit 0
+}
 
 Write-Host '[1/7] bundle launcher (esbuild)...'
 $esbuild = Join-Path $root 'node_modules\.bin\esbuild.cmd'

@@ -48,9 +48,66 @@
 [`tools/activation-server/README.md`](tools/activation-server/README.md) —— 需要一个可自行部署的激活服务
 （零依赖单文件，国内云服务器即可）。
 
-## 打包与运行 EXE（Windows x64 单文件）
+## 桌面端与打包（Windows x64）
 
-### 怎么得到 EXE
+项目有两条交付线，**功能相同、共用同一份 `.output` 生产产物**：
+
+| 形态 | 命令 | 产物 | 启动方式 |
+| --- | --- | --- | --- |
+| **桌面端（Electron，推荐）** | `npm run electron:build` | `dist\electron\totoro-heaven-<版本>-portable.exe`（单文件 portable） | 双击 = 独立窗口（无浏览器、无控制台黑框） |
+| 浏览器版（Node SEA，兜底） | `npm run sea` | `dist\totoro-heaven.exe`（约 92 MB） | 双击 = 起本地服务 + 自动打开浏览器 |
+
+### 桌面端（Electron）
+
+前置：`npm ci`（会安装 `electron` / `electron-builder`）。
+
+> 国内网络：`electron` 的安装脚本默认从 GitHub 下载运行时，github.com 不可达时先设镜像再安装：
+> `set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`（或 huaweicloud：
+> `https://mirrors.huaweicloud.com/electron/`）。打包脚本本身也会在未显式配置时默认用 npmmirror。
+
+```powershell
+npm run build           # 生成 .output（已有干净产物时 build-electron.ps1 会自动判断并跳过）
+npm run electron:build  # = powershell -File pack/electron/build-electron.ps1
+```
+
+产出 **`dist\electron\totoro-heaven-<版本>-portable.exe`**：单个 exe，双击即用，
+不需要安装 Node / Electron，也不会解出 `runtime\` 目录（portable 会自动解压到临时目录运行）。
+
+- 主进程内 `import()` 加载 `.output/server/index.mjs`（与 SEA 的 `launcher.mjs` 同一条路），
+  **不 spawn 子进程** ⇒ 没有控制台黑框、退出不用回收子进程；
+- 窗口：标题固定「龙猫天堂」、无菜单栏、图标取 `logo.ico`，默认 1280x880；
+- 服务只绑 `127.0.0.1`：端口默认 3000，被占用会自动顺延；Chromium 强制 `--no-proxy-server`
+  （国内代理/加速器会把 loopback 也劫持，SEA 版的 `--app` 窗口踩过这个坑）；
+- 用户数据与 Chromium 缓存落在 **`%APPDATA%\龙猫天堂`**（与参考应用 AI讲学 同构），
+  token / 登录态关掉再开仍在；若该目录不可写（受限令牌/企业策略），启动器会回退到
+  `%TEMP%\龙猫天堂-electron`（见下一条）；
+- **portable 启动器做了两处兼容处理**（`pack/electron/patch-portable-nsis.mjs`）：
+  ① 启动前探测可写 profile（优先 `%APPDATA%\龙猫天堂`，写不进就回退 `%TEMP%`），
+  ② 设置 `ELECTRON_DISABLE_SANDBOX=1` —— 本机 Windows 11 26H2 上 Chromium 沙箱初始化失败会
+  导致 Electron 启动即崩（`STATUS_BREAKPOINT`），而窗口只加载自己的 `127.0.0.1` 页面。
+  ⚠️ electron-builder 的 `nsis.include` 对 portable 目标不生效，所以打包脚本会在构建前给
+  `portable.nsi` 模板打补丁（幂等，可重复构建）；
+- 授权目录规则不变（见 `server/utils/license/instance.ts`，老用户的机器码不会被 Electron 版改掉）；
+  旧 SEA 版把授权放在 **EXE 旁边的 `totoro-heaven-data\license.json`** 或 `%TEMP%\totoro-heaven-data`
+  时，新桌面端首次启动会自动识别并**迁移到 userData**（`%APPDATA%\龙猫天堂\data`，机器码不变，
+  已发证书继续有效），不需要重新激活；
+- 启动失败（端口全占、`.output` 缺失、安全软件拦截）会**弹窗说明**而不是闪退，
+  日志在 `%TEMP%\totoro-heaven-electron.log`。
+- 开发态直接跑：`npm run build && npm run electron`（加载仓库里的 `.output`，不打包）。
+- 无人值守自检（CI/排障用，不创建窗口，只验证「打包后的内嵌 Nitro 服务」）：
+  ```powershell
+  $env:TOTORO_SMOKE = '1'
+  $env:TOTORO_SMOKE_OUT = 'dist\smoke.txt'
+  .\dist\electron\totoro-heaven-1.3.2-portable.exe   # 退出码 0 = 通过，smoke.txt 里有 url/ok/bytes
+  ```
+- **Electron 版本刻意 pin 在 `43.3.0`**：45.0.0 在 Windows 11 26H2 上启动即崩（`electron.exe`
+  内 `0xc0000005`，2026-10-27 实测），44.7.0 同样崩；43.3.0 与本机可正常运行的 Obsidian
+  桌面端一致（同为 43.3.0）。升级前务必实际打开一次窗口验证。
+
+> 国内网络：`pack/electron/build-electron.ps1` 在未显式设置 `ELECTRON_MIRROR` 时默认使用 npmmirror；
+> GitHub 可达的机器可清空该变量（`set ELECTRON_MIRROR=`）走官方源。
+
+### 浏览器版（Node SEA，兜底）
 
 ```powershell
 npm ci
@@ -58,7 +115,8 @@ npm run sea          # = powershell -File pack/sea/build-sea.ps1
 ```
 
 约 90 秒后产出 **`dist\totoro-heaven.exe`（约 92 MB）**：单文件、自带 Node 运行时，
-用的人不需要装 Node 或任何依赖。另有两条路：
+用的人不需要装 Node 或任何依赖。启动器逻辑（选可写运行目录、解包 `.output`、端口顺延、
+三重兜底打开浏览器）仍在 `pack/sea/launcher.mjs`，Electron 版出问题时可以随时退回这条线。
 
 - GitHub Actions：仓库 → **Actions** → **Build Windows exe** → 某次成功运行的页面底部
   **Artifacts → `totoro-heaven-exe`**（保留 14 天）；
@@ -67,6 +125,7 @@ npm run sea          # = powershell -File pack/sea/build-sea.ps1
   esbuild 打 launcher → tar 打 `.output` → `node --experimental-sea-config` 生成 blob →
   复制 `node.exe` → rcedit 设图标 → postject 注入（图标会从最终产物里复核两次）。
   缺版本条目或 `public/version-art/<版本>.png` 时会**直接失败**，不是 CI 的问题。
+  （Electron 版复用了同一套 `.output` 准备步骤：`build-sea.ps1 -PrepareOnly`。）
 
 ### ⚠️ EXE 放在哪个盘很重要（实测）
 
@@ -80,10 +139,20 @@ npm run sea          # = powershell -File pack/sea/build-sea.ps1
 
 ### 首次运行
 
-1. 双击 `totoro-heaven.exe`；
+**桌面端（Electron portable）**：
+
+1. 双击 `totoro-heaven-<版本>-portable.exe`；
 2. 若弹出「**Windows 已保护你的电脑**」→ 点「**更多信息**」→「**仍要运行**」。
    EXE 未做代码签名（每次重新打包都是全新二进制、在微软那边没有任何声誉），
    这是 Windows 对"没签名的陌生程序"的常规拦截，**不是报毒**，也没有病毒检测记录；
+3. 直接出现**独立窗口**（无控制台黑框、无浏览器地址栏）；端口被占用会自动顺延，
+   也可 `set TOTORO_PORT=4000` 指定；
+4. 数据在 `%APPDATA%\龙猫天堂`；退出 = 关掉窗口。
+
+**浏览器版（Node SEA）**：
+
+1. 双击 `totoro-heaven.exe`；
+2. 同上，SmartScreen 提示时点「更多信息」→「仍要运行」；
 3. 黑色控制台窗口会打印地址并**自动打开浏览器**：默认 `http://127.0.0.1:3000/`，
    端口被占用会自动顺延（窗口里显示实际端口），也可 `set TOTORO_PORT=4000` 指定；
 4. 首次运行会在 **EXE 同级的 `runtime\`** 目录解包运行所需文件（该目录不可写时回退
