@@ -532,7 +532,7 @@ const degradeToFallback = (failure: GeoFailure) => {
   geoFailure.value = failure
   const choice = pickLocateFallback(freeLocateCandidates.value)
   if (choice) focusOn(choice.pts)
-  showSnackbar(locateFallbackNotice(failure, choice), 'warning')
+  showSnackbar(`${locateFallbackNotice(failure, choice)} 也可用页面顶部的「手动按坐标定位」。`, 'warning')
 }
 
 /** 「定位（我的位置）」：桌面端先问主进程（Windows 定位）；网页端/失败时再问浏览器；都不可用 ⇒ 降级 */
@@ -925,6 +925,36 @@ const pathOf = (pts: P[], close = false) => {
       </div>
     </v-alert>
 
+    <!--
+      🆕 2026-10-27：系统定位不可用时的常驻兜底（放在页面最上面，避免用户找不到）。
+      现场：研途健行任务没有官方线路，桌面端/浏览器定位都拿不到位置时，地图停在甘肃，用户没法画。
+      手机上高德/微信位置长按学校即可复制经纬度，粘进来就能把地图移过去。
+    -->
+    <v-card variant="tonal" class="mb-3 pa-3">
+      <div class="text-body-2 font-weight-bold mb-2">
+        <v-icon class="mr-1" size="small">mdi-map-marker-plus</v-icon>
+        定位不到学校？手动按坐标定位（系统定位不可用时用这个）
+      </div>
+      <div class="d-flex flex-wrap align-center ga-2">
+        <v-text-field
+          v-model="manualCoord"
+          density="compact"
+          hide-details
+          class="flex-grow-0"
+          style="max-width: 360px"
+          placeholder="纬度,经度（例 31.3735,119.4808；高德复制亦可）"
+          @keyup.enter="jumpToManualCoord"
+        />
+        <v-btn size="small" color="secondary" variant="tonal" prepend-icon="mdi-crosshairs-gps" @click="jumpToManualCoord">
+          按坐标定位
+        </v-btn>
+      </div>
+      <div class="text-caption text-medium-emphasis mt-2">
+        手机上打开高德/微信位置，长按学校 → 复制坐标，粘到这里，再点「按坐标定位」；随后沿操场画一圈即可。
+        「纬度,经度」和「经度,纬度」两种顺序都能识别。
+      </div>
+    </v-card>
+
     <v-row dense>
       <v-col cols="12" md="8">
         <v-card>
@@ -1198,33 +1228,6 @@ const pathOf = (pts: P[], close = false) => {
         >
           快速定位（把地图移到当前几何 / 官方路线）
         </v-btn>
-
-        <!--
-          🆕 2026-10-27：系统定位不可用时的最后兜底。
-          现场：研途健行任务没有官方线路，桌面端/浏览器定位都拿不到位置时，地图停在甘肃，用户没法画。
-          手机上高德/微信位置长按学校即可复制经纬度，粘进来就能把地图移过去。
-        -->
-        <v-card variant="tonal" class="mt-3 pa-3">
-          <div class="text-body-2 font-weight-bold mb-2">系统定位不可用？手动按坐标定位</div>
-          <div class="d-flex flex-wrap align-center ga-2">
-            <v-text-field
-              v-model="manualCoord"
-              density="compact"
-              hide-details
-              class="flex-grow-0"
-              style="max-width: 340px"
-              placeholder="纬度,经度（例 31.3735,119.4808；高德复制亦可）"
-              @keyup.enter="jumpToManualCoord"
-            />
-            <v-btn size="small" color="secondary" variant="tonal" prepend-icon="mdi-map-marker-plus" @click="jumpToManualCoord">
-              按坐标定位
-            </v-btn>
-          </div>
-          <div class="text-caption text-medium-emphasis mt-2">
-            手机上打开高德/微信位置，长按学校 → 复制坐标，粘到这里；随后沿操场画一圈即可。
-            「纬度,经度」和「经度,纬度」两种顺序都能识别。
-          </div>
-        </v-card>
       </v-col>
     </v-row>
   </v-container>
