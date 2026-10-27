@@ -45,6 +45,7 @@ import {
   type FreePathShape,
 } from '~/utils/mp/pathShape'
 // 🆕 2026-09-22（审计 B1/B2）：几何装配与跑步页**共用同一个纯函数入口**（否则"预览 ≠ 真跑"）
+import { NEUTRAL_MAP_CENTER, tryGeolocate } from '~/utils/mp/mapCenter'
 import { resolveFreePathGeometry } from '~/utils/mp/freePathGeometry'
 import { generateCorridorRoute } from '~/utils/mp/generateRoute'
 import { distanceMeters, type LatLng } from '~/utils/mp/routeSimilarity'
@@ -119,7 +120,11 @@ const hasStart = computed(() => Boolean(entryStart.value))
 // ---------- 地图（Web Mercator 滑溜地图：瓦片 + SVG 叠加）----------
 const Z_MIN = 13
 const Z_MAX = 19
-const center = ref<N>({ latitude: 31.3735, longitude: 119.4808 }) // 默认：天目湖校区
+// 🆕 2026-10-27：**不再写死南航天目湖校区**（原来其他学校打开就停在别人的操场上）。
+//    取值顺序：已选线路坐标 → 使用者当前位置 → 中性默认值。
+const center = ref<N>({ latitude: NEUTRAL_MAP_CENTER.latitude, longitude: NEUTRAL_MAP_CENTER.longitude })
+/** 初始中心快照：用来判断"地图有没有已经被几何定位走"（没走才去做浏览器定位） */
+const initialCenter = { latitude: center.value.latitude, longitude: center.value.longitude }
 const zoom = ref(17)
 const TILE = 256
 
@@ -208,6 +213,23 @@ const onResize = () => {
   const el = mapEl.value
   if (el) viewport.value = { w: el.clientWidth, h: el.clientHeight }
 }
+/**
+ * 🆕 2026-10-27：地图中心不写死学校。
+ * 挂载后若**还没有任何几何**把地图定位走（中心仍是初始值），就用**使用者当前位置**定位 ——
+ * 不管哪所学校，打开就是本校操场附近。
+ */
+function centerOnUserIfNoGeometry() {
+  window.setTimeout(() => {
+    const moved =
+      Math.abs(center.value.latitude - initialCenter.latitude) > 1e-6 ||
+      Math.abs(center.value.longitude - initialCenter.longitude) > 1e-6
+    if (moved) return
+    void tryGeolocate().then((p) => {
+      if (p) center.value = p
+    })
+  }, 500)
+}
+
 onMounted(() => {
   /**
    * 🆕 2026-09-22（真实用户实测）：**先从本机缓存把任务恢复回来**，再读路线库。
@@ -218,6 +240,7 @@ onMounted(() => {
   lib.load()
   onResize()
   window.addEventListener('resize', onResize)
+  centerOnUserIfNoGeometry()
   /**
    * 把这条本机记录上**已经保存的形状**填进草稿（没有就停在"先选形状"）。
    * ⚠️ 只在挂载时读一次：保存后记录会变，若跟着 watch 重灌草稿会把用户

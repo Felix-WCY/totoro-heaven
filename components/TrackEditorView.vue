@@ -38,6 +38,7 @@ import {
 import { generateCorridorRoute } from '~/utils/mp/generateRoute'
 // 🆕 2026-09-22（真实用户实测）：从跑步页直达进来时 `?line=<pointId>` 要能**预选**这条线路
 import { lineIdFromQuery } from '~/utils/mp/routeGroups'
+import { NEUTRAL_MAP_CENTER, schoolCenter, schoolMapSpots, tryGeolocate, type LatLngLike } from '~/utils/mp/mapCenter'
 import type { LatLng } from '~/utils/mp/routeSimilarity'
 import type { MpRunLine } from '~/src/mp/types'
 // 🆕 2026-09-22（issue #12）：判"任务到底有没有下发线路"（纯函数，与跑步页/门禁同源）
@@ -75,7 +76,14 @@ const showSnackbar = useNotice()
 // ---------- 地图（Web Mercator 滑溜地图：瓦片 + SVG 叠加）----------
 const Z_MIN = 13
 const Z_MAX = 19
-const center = ref<N>({ latitude: 31.3735, longitude: 119.4808 }) // 默认：天目湖校区
+// 🆕 2026-10-27：**不再写死南航天目湖校区**（原来其他学校打开就停在别人的操场上，
+//    表现为"画不了跑道"）。取值顺序：已选线路坐标 → 使用者当前位置 → 中性默认值。
+const center = ref<N>({
+  latitude: NEUTRAL_MAP_CENTER.latitude,
+  longitude: NEUTRAL_MAP_CENTER.longitude,
+})
+/** 初始中心快照：用来判断"地图有没有已经被几何定位走"（没走才去做浏览器定位） */
+const initialCenter = { latitude: center.value.latitude, longitude: center.value.longitude }
 const zoom = ref(17)
 const TILE = 256
 
@@ -197,6 +205,43 @@ const loadDraft = (id: string) => {
   draftStartPoint.value = e?.start?.point ? num(e.start.point) : null
   draftStartDirection.value = e?.start?.direction === 'reverse' ? 'reverse' : 'forward'
 }
+/**
+ * 🆕 2026-10-27：地图中心不写死学校。
+ *
+ * 挂载后若**还没有任何几何**把地图定位走（中心仍是初始值），就用**使用者当前位置**定位。
+ * 这样不管哪所学校，打开「跑道编辑」就是本校操场附近 ——
+ * 辽宁科技大学原来会停在南航天目湖校区，用户根本找不到自己的操场。
+ */
+function centerOnSchoolNotSelectedLine() {
+  window.setTimeout(() => {
+    const moved =
+      Math.abs(center.value.latitude - initialCenter.latitude) > 1e-6 ||
+      Math.abs(center.value.longitude - initialCenter.longitude) > 1e-6
+    if (moved) return
+    /**
+     * 用户口径（2026-10-27）：**先按"学校"定位，不要按"已选线路"**；
+     * 同一所学校的多个操场由用户在下面的地点选择器里挑。
+     * 所以这里用**该校全部官方线路**的包围盒中心，而不是当前选中那条。
+     */
+    const bySchool = schoolCenter(activeLines.value as { pointList?: LatLngLike[] }[])
+    if (bySchool) {
+      center.value = { latitude: bySchool.latitude, longitude: bySchool.longitude }
+      return
+    }
+    // 该校没有下发坐标（未下发线路的任务）⇒ 退到使用者当前位置
+    void tryGeolocate().then((p) => {
+      if (p) center.value = p
+    })
+  }, 400)
+}
+
+/** 该校可选的场地（每条官方线路 = 一个操场）；点一下把地图移过去 */
+const mapSpots = computed(() => schoolMapSpots(activeLines.value as { pointName?: unknown; pointList?: LatLngLike[] }[]))
+function jumpToSpot(name: string) {
+  const spot = mapSpots.value.find((s) => s.name === name)
+  if (spot) center.value = { latitude: spot.center.latitude, longitude: spot.center.longitude }
+}
+
 onMounted(() => {
   /**
    * 🆕 2026-09-22（真实用户实测）：**先从本机缓存把任务恢复回来**，再读路线库。
@@ -209,6 +254,7 @@ onMounted(() => {
   if (el) viewport.value = { w: el.clientWidth, h: el.clientHeight }
   window.addEventListener('resize', onResize)
   loadDraft(lineId.value)
+  centerOnSchoolNotSelectedLine()
 })
 onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 const onResize = () => {
@@ -846,6 +892,25 @@ const lineOptions = computed(() =>
               <v-btn value="inner" size="small">内圈</v-btn>
               <v-btn value="start" size="small">起跑点</v-btn>
             </v-btn-toggle>
+            <!-- 🆕 2026-10-27（用户口径：先按"学校"定位，同一学校的操场可以选）：
+                 这里列出本校全部官方线路（= 一个个操场），点一下把地图移过去。
+                 不再依赖"当前选中哪条线路"，也不再有写死某所学校坐标的默认值。 -->
+            <v-select
+              v-if="mapSpots.length"
+              :model-value="''"
+              :items="mapSpots.map((s) => s.name)"
+              label="跳到本校哪个操场"
+              density="compact"
+              variant="outlined"
+              hide-details
+              prepend-inner-icon="mdi-map-marker-radius"
+              class="mb-2"
+              @update:model-value="(v: unknown) => jumpToSpot(String(v ?? ''))"
+            >
+              <template #no-data>
+                <span class="text-caption">本站暂无可跳转的场地</span>
+              </template>
+            </v-select>
             <!-- 快速定位（用户要求）：选中线路后一键把地图移到它那里 -->
             <v-btn
               block
