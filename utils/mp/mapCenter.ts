@@ -112,13 +112,97 @@ export function schoolCenter(
 }
 
 /**
- * 取使用者当前位置（浏览器定位）。
+ * 手动解析用户粘贴的坐标（浏览器定位不可用时的兜底）。
+ *
+ * 支持：
+ *   · `31.3735,119.4808`（纬度,经度 —— 本页面提示的写法）
+ *   · `119.4808,31.3735`（高德/微信“复制坐标”常见的经度,纬度 —— 自动识别并交换）
+ *   · 逗号/中文逗号/分号/空格 分隔都可以
+ *
+ * 判据（简单且可解释）：`|值| > 90` 的那个一定是经度；两个都 ≤ 90 时按“纬度,经度”解释。
+ * 解析失败返回 null（不猜、不把坏数据当地址）。
+ */
+export function parseManualLatLng(text: string): LatLngLike | null {
+  const raw = String(text ?? '').trim()
+  if (!raw) return null
+  const nums = raw.match(/-?\d+(?:\.\d+)?/g)
+  if (!nums || nums.length !== 2) return null
+  const a = Number(nums[0])
+  const b = Number(nums[1])
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  let latitude: number
+  let longitude: number
+  if (Math.abs(a) > 90 && Math.abs(b) <= 90) {
+    longitude = a
+    latitude = b
+  } else if (Math.abs(b) > 90 && Math.abs(a) <= 90) {
+    latitude = a
+    longitude = b
+  } else if (Math.abs(a) <= 90 && Math.abs(b) <= 90) {
+    // 两个都像纬度时按用户提示的“纬度,经度”解释（中国大部分地区经度 > 90，会走上面两支）
+    latitude = a
+    longitude = b
+  } else {
+    return null
+  }
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null
+  return { latitude, longitude }
+}
+
+/** 桌面端（Electron）主进程回传的定位结果 */
+export interface DesktopGeoFix {
+  latitude: number
+  longitude: number
+  accuracyM: number
+}
+
+interface DesktopGeoBridge {
+  locate(): Promise<{ ok?: boolean; latitude?: number; longitude?: number; accuracy?: number; error?: string }>
+}
+
+/** 桌面端 preload 暴露的桥（`electron/preload.cjs` → `window.totoroDesktop`）；网页端没有 */
+function desktopGeoBridge(): DesktopGeoBridge | undefined {
+  if (typeof window === 'undefined') return undefined
+  const bridge = (window as unknown as { totoroDesktop?: DesktopGeoBridge }).totoroDesktop
+  return bridge && typeof bridge.locate === 'function' ? bridge : undefined
+}
+
+/**
+ * 桌面端定位：由 Electron 主进程调 **Windows 定位服务（WinRT）**再回传。
+ *
+ * 为什么要它：Electron 自带的 Chromium 在 Windows/国内环境下经常拿不到位置
+ * （没有 Google 定位服务；老的 `WinrtGeolocationImplementation` 开关在当前 Chromium 里已不生效），
+ * 而浏览器版用的是浏览器自己的定位服务所以正常。网页端没有这个桥 ⇒ 返回 null，走 navigator。
+ */
+export async function tryDesktopGeolocate(): Promise<DesktopGeoFix | null> {
+  const bridge = desktopGeoBridge()
+  if (!bridge) return null
+  try {
+    const result = await bridge.locate()
+    if (!result || result.ok !== true) return null
+    const latitude = Number(result.latitude)
+    const longitude = Number(result.longitude)
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
+    const accuracyM = Number(result.accuracy)
+    return { latitude, longitude, accuracyM: Number.isFinite(accuracyM) && accuracyM > 0 ? accuracyM : 0 }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 取使用者当前位置（浏览器定位 / 桌面端系统定位）。
  * **绝不抛错**：不支持 / 被拒 / 超时一律返回 `null`，调用方继续用中性默认值。
+ *
+ * 顺序：Electron 里优先走主进程 Windows 定位（桌面端 navigator 经常不可用）；
+ *       网页端没有桥，直接走浏览器定位。
  *
  * @param timeoutMs 超时（毫秒）。默认 6 秒 —— 用户对着"要不要允许定位"的弹窗犹豫时，
  *                  不能让地图一直不出现。
  */
-export function tryGeolocate(timeoutMs = 6000): Promise<LatLngLike | null> {
+export async function tryGeolocate(timeoutMs = 6000): Promise<LatLngLike | null> {
+  const desktopFix = await tryDesktopGeolocate()
+  if (desktopFix) return desktopFix
   if (typeof navigator === 'undefined' || !navigator.geolocation) return Promise.resolve(null)
   return new Promise((resolve) => {
     let settled = false

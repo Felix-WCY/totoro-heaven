@@ -32,11 +32,12 @@
 
 'use strict'
 
-const { app, BrowserWindow, Menu, dialog, shell, session } = require('electron')
+const { app, BrowserWindow, Menu, dialog, shell, session, ipcMain } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const http = require('node:http')
 const net = require('node:net')
+const { execFile } = require('node:child_process')
 const { pathToFileURL } = require('node:url')
 
 const APP_TITLE = '龙猫天堂'
@@ -387,6 +388,229 @@ async function startNitroServer() {
   return url
 }
 
+/* ============================== Windows 定位（WinRT）============================== */
+
+/**
+ * 为什么不让页面直接用 `navigator.geolocation`：
+ *   Electron 自带的 Chromium 在 Windows/国内环境下经常拿不到位置（没有 Google 定位服务；
+ *   旧办法 `--enable-features=WinrtGeolocationImplementation` 在当前 Chromium 里已不再生效）。
+ *   而系统自带的 `Windows.Devices.Geolocation`（WinRT）是可用的 —— 由主进程用 PowerShell
+ *   问一次 Windows，再把经纬度通过 IPC 回给页面；页面侧仍保留 navigator.geolocation 兜底。
+ *
+ * 只在本机页面（127.0.0.1）里允许调用；坐标只在内存里用于地图居中，不落盘、不上传。
+ */
+const WINDOWS_LOCATION_PS = String.raw`
+$ErrorActionPreference = 'Stop'
+function Emit($obj) {
+  $json = ConvertTo-Json $obj -Compress
+  if ($env:TOTORO_GEO_OUT) {
+    [System.IO.File]::WriteAllText($env:TOTORO_GEO_OUT, $json, (New-Object System.Text.UTF8Encoding($false)))
+  } else {
+    [Console]::Out.Write($json)
+  }
+}
+try {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq ('IAsyncOperation' + [char]96 + '1')
+  })[0]
+  function Await($WinRtTask, $ResultType) {
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    [void]$netTask.GetAwaiter().GetResult()
+    $netTask.Result
+  }
+  $null = [Windows.Devices.Geolocation.Geolocator, Windows.Devices.Geolocation, ContentType = WindowsRuntime]
+  $locator = New-Object Windows.Devices.Geolocation.Geolocator
+  $locator.DesiredAccuracy = [Windows.Devices.Geolocation.PositionAccuracy]::High
+  $pos = Await ($locator.GetGeopositionAsync()) ([Windows.Devices.Geolocation.Geoposition])
+  $p = $pos.Coordinate.Point.Position
+  $result = @{
+    ok = $true
+    latitude = [double]$p.Latitude
+    longitude = [double]$p.Longitude
+    accuracy = [double]$pos.Coordinate.Accuracy
+  }
+  Emit $result
+} catch {
+  $result = @{ ok = $false; error = [string]$_.Exception.Message }
+  Emit $result
+}
+`
+
+/** PowerShell 可执行文件路径（系统目录，不用 PATH） */
+function powershellExePath() {
+  const systemRoot = process.env.SystemRoot || 'C:\\Windows'
+  return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
+/** 解析定位脚本输出（stdout 的最后一行 JSON，或任务通道写出的文件内容） */
+function parseGeoJson(raw) {
+  const line = String(raw || '')
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .pop()
+  if (!line) return null
+  try {
+    const parsed = JSON.parse(line)
+    if (!parsed || parsed.ok !== true) {
+      return { ok: false, error: String(parsed?.error || '系统没有返回位置') }
+    }
+    const latitude = Number(parsed.latitude)
+    const longitude = Number(parsed.longitude)
+    const accuracy = Number(parsed.accuracy)
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return { ok: false, error: '系统返回的位置无效' }
+    }
+    return { ok: true, latitude, longitude, accuracy: Number.isFinite(accuracy) && accuracy > 0 ? accuracy : 0 }
+  } catch {
+    return null
+  }
+}
+
+function execFileP(file, args, options) {
+  return new Promise((resolve) => {
+    execFile(file, args, options, (err, stdout, stderr) => {
+      resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') })
+    })
+  })
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * 第一通道：直接在 Electron 子进程里跑 PowerShell。
+ *
+ * ⚠️ 实测（2026-10-27）：Windows 定位会**拒绝 Electron 进程树里的 PowerShell**
+ * （直接运行同一个脚本能拿到坐标，但作为 electron.exe 的子进程时报
+ * 「应在应用程序清单中声明 ID_CAP_LOCATION / 拒绝访问」）⇒ 必须有第二通道。
+ */
+function runWindowsLocationDirect() {
+  return new Promise((resolve) => {
+    const encoded = Buffer.from(WINDOWS_LOCATION_PS, 'utf16le').toString('base64')
+    const args = ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded]
+    execFile(
+      powershellExePath(),
+      args,
+      { windowsHide: true, timeout: 25000, maxBuffer: 1024 * 1024, encoding: 'utf8' },
+      (err, stdout, stderr) => {
+        if (err) {
+          log('geolocate: direct powershell failed', err.message, String(stderr || '').slice(0, 500))
+          resolve({ ok: false, error: `系统定位调用失败：${err.message}` })
+          return
+        }
+        const parsed = parseGeoJson(stdout)
+        resolve(parsed || { ok: false, error: '系统定位返回了无法解析的数据' })
+      },
+    )
+  })
+}
+
+/**
+ * 第二通道：让 **Task Scheduler（系统服务）** 去启动 PowerShell —— 进程不在 Electron 进程树里，
+ * 不会继承 Electron 的进程缓解策略/身份限制，实测能正常拿到 Windows 定位。
+ *
+ * 做法：临时写 PS 脚本 + 一个隐藏启动的 VBS，用 schtasks 建一次性任务、立刻运行、
+ * 轮询它写出的 JSON，最后删除任务与临时文件（无论成功失败都清）。
+ *
+ * ⚠️ 这是"系统定位"兜底；如果企业策略禁止创建计划任务，会返回错误，页面还有「手动按坐标定位」。
+ */
+async function runWindowsLocationViaTask() {
+  const tmpDir = app.getPath('temp')
+  const stamp = `${process.pid}-${Date.now()}`
+  const taskName = `totoro-heaven-geo-${stamp}`
+  const scriptFile = path.join(tmpDir, `totoro-geo-${stamp}.ps1`)
+  const vbsFile = path.join(tmpDir, `totoro-geo-${stamp}.vbs`)
+  const outFile = path.join(tmpDir, `totoro-geo-${stamp}.json`)
+  const cleanup = async () => {
+    await execFileP('schtasks.exe', ['/Delete', '/TN', taskName, '/F'], { windowsHide: true, timeout: 10000 })
+    for (const f of [scriptFile, vbsFile, outFile]) {
+      try {
+        fs.rmSync(f, { force: true })
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  try {
+    fs.writeFileSync(scriptFile, WINDOWS_LOCATION_PS, 'utf8')
+    const vbs = [
+      'Set sh = CreateObject("WScript.Shell")',
+      `sh.Environment("Process")("TOTORO_GEO_OUT") = "${outFile.replace(/"/g, '""')}"`,
+      `sh.Run """${powershellExePath()}"" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${scriptFile}""", 0, False`,
+      '',
+    ].join('\r\n')
+    fs.writeFileSync(vbsFile, vbs, 'utf8')
+
+    const create = await execFileP(
+      'schtasks.exe',
+      [
+        '/Create',
+        '/TN',
+        taskName,
+        '/TR',
+        `"${path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wscript.exe')}" "${vbsFile}"`,
+        '/SC',
+        'ONCE',
+        '/ST',
+        '23:59',
+        '/F',
+        '/IT',
+      ],
+      { windowsHide: true, timeout: 15000 },
+    )
+    if (create.err) {
+      log('geolocate: task create failed', create.err.message, create.stderr.slice(0, 300))
+      return { ok: false, error: '系统定位备用通道创建失败（可能被策略禁止）' }
+    }
+    const run = await execFileP('schtasks.exe', ['/Run', '/TN', taskName], { windowsHide: true, timeout: 15000 })
+    if (run.err) {
+      log('geolocate: task run failed', run.err.message, run.stderr.slice(0, 300))
+      return { ok: false, error: '系统定位备用通道启动失败' }
+    }
+
+    const deadline = Date.now() + 20000
+    while (Date.now() < deadline) {
+      await sleep(250)
+      if (!fs.existsSync(outFile)) continue
+      const parsed = parseGeoJson(fs.readFileSync(outFile, 'utf8'))
+      if (parsed) return parsed
+    }
+    return { ok: false, error: '系统定位超时（备用通道）' }
+  } catch (err) {
+    log('geolocate: task fallback crashed', err)
+    return { ok: false, error: String(err?.message || err) }
+  } finally {
+    await cleanup()
+  }
+}
+
+/** 调一次 Windows 定位（失败返回 `{ ok:false, error }`，不抛错）：先直连，被拒再走计划任务通道 */
+async function getWindowsLocation() {
+  const direct = await runWindowsLocationDirect()
+  if (direct.ok) return direct
+  log('geolocate: direct failed, trying scheduled-task channel', direct.error)
+  const viaTask = await runWindowsLocationViaTask()
+  if (viaTask.ok) return viaTask
+  log('geolocate: all channels failed', viaTask.error)
+  return viaTask
+}
+
+ipcMain.handle('totoro:geolocate', async (event) => {
+  // 只服务本机页面：别的来源一律拒绝
+  try {
+    const url = new URL(event.senderFrame?.url || event.sender.getURL())
+    const local = (url.protocol === 'http:' || url.protocol === 'https:') && (url.hostname === HOST || url.hostname === 'localhost')
+    if (!local) return { ok: false, error: 'forbidden' }
+  } catch {
+    return { ok: false, error: 'forbidden' }
+  }
+  return getWindowsLocation()
+})
+
 /* ============================== 窗口 ============================== */
 
 /** 服务启动期间的本地占位页（窗口立即出现，不白屏、不闪浏览器默认图标） */
@@ -431,6 +655,8 @@ function createWindow() {
       webviewTag: false,
       spellcheck: false,
       devTools: !IS_PACKAGED,
+      // 只暴露 window.totoroDesktop.locate()（主进程 Windows 定位），见 electron/preload.cjs
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   })
 

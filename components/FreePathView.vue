@@ -45,7 +45,7 @@ import {
   type FreePathShape,
 } from '~/utils/mp/pathShape'
 // 🆕 2026-09-22（审计 B1/B2）：几何装配与跑步页**共用同一个纯函数入口**（否则"预览 ≠ 真跑"）
-import { NEUTRAL_MAP_CENTER, tryGeolocate } from '~/utils/mp/mapCenter'
+import { NEUTRAL_MAP_CENTER, parseManualLatLng, tryDesktopGeolocate, tryGeolocate } from '~/utils/mp/mapCenter'
 import { resolveFreePathGeometry } from '~/utils/mp/freePathGeometry'
 import { generateCorridorRoute } from '~/utils/mp/generateRoute'
 import { distanceMeters, type LatLng } from '~/utils/mp/routeSimilarity'
@@ -535,8 +535,32 @@ const degradeToFallback = (failure: GeoFailure) => {
   showSnackbar(locateFallbackNotice(failure, choice), 'warning')
 }
 
-/** 「定位（我的位置）」：先问浏览器要位置；不可用/被拒/超时 ⇒ 降级（见 `degradeToFallback`） */
-const locateMe = () => {
+/** 「定位（我的位置）」：桌面端先问主进程（Windows 定位）；网页端/失败时再问浏览器；都不可用 ⇒ 降级 */
+const locateMe = async () => {
+  if (geoBusy.value) return
+  /**
+   * 🆕 2026-10-27（用户实测：浏览器版能定位，桌面版不能）：
+   * Electron 自带 Chromium 在国内/无 Google 定位服务时 `navigator.geolocation` 直接失败；
+   * 桌面端 preload 暴露了 `window.totoroDesktop.locate()`（主进程调 Windows WinRT 定位）⇒ 先走它。
+   * 网页端没有这个桥，会立刻返回 null，继续走下面的浏览器定位（行为不变）。
+   */
+  geoBusy.value = true
+  const desktopFix = await tryDesktopGeolocate()
+  if (desktopFix) {
+    myPos.value = {
+      latitude: desktopFix.latitude,
+      longitude: desktopFix.longitude,
+      accuracyM: desktopFix.accuracyM,
+    }
+    geoFailure.value = null
+    center.value = { latitude: desktopFix.latitude, longitude: desktopFix.longitude }
+    zoom.value = GEO_ZOOM
+    geoBusy.value = false
+    showSnackbar(geoLocatedText(desktopFix.accuracyM))
+    return
+  }
+  geoBusy.value = false
+
   const geo = typeof navigator === 'undefined' ? undefined : navigator.geolocation
   const supported = Boolean(geo && typeof geo.getCurrentPosition === 'function')
   /** ⚠️ 浏览器只在**安全上下文**（https / localhost / 127.0.0.1）里允许定位；换普通域名会被直接禁掉 */
@@ -779,6 +803,23 @@ const focusOn = (ptsIn?: P[]) => {
 }
 /** 快速定位（卡片上的按钮）：把地图移到当前几何 / 官方路线 */
 const locateNow = () => focusOn()
+
+/**
+ * 🆕 2026-10-27：**手动按坐标定位**（系统/浏览器定位都不可用时的最后兜底）。
+ * 现场：研途健行任务没有官方线路，桌面端 `navigator.geolocation` 又拿不到位置，地图只能停在甘肃，
+ * 用户没法找学校画路径。手机上高德/微信位置长按学校可复制经纬度，粘贴即可。
+ */
+const manualCoord = ref('')
+function jumpToManualCoord() {
+  const p = parseManualLatLng(manualCoord.value)
+  if (!p) {
+    showSnackbar('坐标格式不对：请粘贴「纬度,经度」（例 31.3735,119.4808；高德复制的「经度,纬度」也能识别）', 'warning')
+    return
+  }
+  center.value = { latitude: p.latitude, longitude: p.longitude }
+  zoom.value = GEO_ZOOM
+  showSnackbar('已按坐标定位；请沿操场画一圈后保存', 'success')
+}
 /** 这个任务下发的官方线路条数（提示里如实报数） */
 const officialLineCount = computed(() => activeLines.value.length)
 /**
@@ -1157,6 +1198,33 @@ const pathOf = (pts: P[], close = false) => {
         >
           快速定位（把地图移到当前几何 / 官方路线）
         </v-btn>
+
+        <!--
+          🆕 2026-10-27：系统定位不可用时的最后兜底。
+          现场：研途健行任务没有官方线路，桌面端/浏览器定位都拿不到位置时，地图停在甘肃，用户没法画。
+          手机上高德/微信位置长按学校即可复制经纬度，粘进来就能把地图移过去。
+        -->
+        <v-card variant="tonal" class="mt-3 pa-3">
+          <div class="text-body-2 font-weight-bold mb-2">系统定位不可用？手动按坐标定位</div>
+          <div class="d-flex flex-wrap align-center ga-2">
+            <v-text-field
+              v-model="manualCoord"
+              density="compact"
+              hide-details
+              class="flex-grow-0"
+              style="max-width: 340px"
+              placeholder="纬度,经度（例 31.3735,119.4808；高德复制亦可）"
+              @keyup.enter="jumpToManualCoord"
+            />
+            <v-btn size="small" color="secondary" variant="tonal" prepend-icon="mdi-map-marker-plus" @click="jumpToManualCoord">
+              按坐标定位
+            </v-btn>
+          </div>
+          <div class="text-caption text-medium-emphasis mt-2">
+            手机上打开高德/微信位置，长按学校 → 复制坐标，粘到这里；随后沿操场画一圈即可。
+            「纬度,经度」和「经度,纬度」两种顺序都能识别。
+          </div>
+        </v-card>
       </v-col>
     </v-row>
   </v-container>
