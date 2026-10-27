@@ -168,7 +168,25 @@ function openBrowser(url, onDone) {
     next(0)
   }
 
-  launchAppWindow(0)
+  /**
+   * ⚠️ 2026-10-27 实测结论：**默认不走应用窗口**。
+   *
+   * 现象：`msedge --app=http://127.0.0.1:<port>/` 打开的是**空白窗口**，
+   * 且服务端日志里 `/api/` 请求数 = 0（页面根本没加载），任务栏图标退化成浏览器默认图标。
+   * 同一个地址用普通浏览器标签页打开**完全正常** ⇒ 问题在 `--app` 启动方式本身
+   * （独立实例/配置、系统代理、已有 Edge 实例吞参数等，环境下差异大）。
+   *
+   * 继续在这个壳上打转性价比太低 ⇒ 默认恢复为"用默认浏览器打开"（这条路一直可用）。
+   * 想要真桌面端，应改用 Electron/WebView2 壳（独立窗口 + 自有图标 + 无控制台），
+   * 那是**换实现**而不是调参数。
+   *
+   * 需要临时试验应用窗口时：设 `TOTORO_APP_WINDOW=1` 再启动。
+   */
+  if (process.env.TOTORO_APP_WINDOW === '1') {
+    launchAppWindow(0)
+    return
+  }
+  fallbackTab(url, oneLine, onDone)
 }
 
 /**
