@@ -3,7 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import net from 'node:net'
-import { exec } from 'node:child_process'
+import { exec, spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import * as tar from 'tar'
 
@@ -42,45 +42,128 @@ let RUNTIME_DIR = ''
  * @param {string} url 要打开的地址（用 127.0.0.1，不用 localhost）
  * @param {() => void} [onDone] 全部尝试结束后的回调（"已在运行"那条分支靠它退出进程）
  */
-function openBrowser(url, onDone) {
-  /**
-   * ⚠️ 2026-10-20 实测教训（**不要给 URL 加引号**）：
-   *   写成 `start "" "http://127.0.0.1:3000/"` 时，node 的 `exec` 会先拼成
-   *   `cmd.exe /d /s /c "start "" "http://...""` —— 引号在这一层被吃掉/错位，
-   *   cmd 把那个空串当成窗口标题、后面就没有"要执行的命令"了 ⇒ **exit code 0 但什么都不打开**。
-   *   实测对比：同一台机器上 `start <url>`（不加引号）能从 EXE 里正常拉起浏览器，
-   *   加了 `""` 标题就"成功但静默失败"。本项目 URL 只有 `http://127.0.0.1:<port>/`，
-   *   不含空格 / `&` / `^`，所以**不加引号是安全的**，且能绕过上面那层引号错位。
-   */
-  const attempts = [
-    ['start', `start ${url}`],
-    ['rundll32', `rundll32 url.dll,FileProtocolHandler ${url}`],
-    ['powershell', `powershell -NoProfile -Command Start-Process ${url}`],
+/**
+ * 找出可用的 Chromium 内核浏览器（Edge 优先：Win10/11 自带）。
+ * @returns {{ name: string, exe: string }[]}
+ */
+function findAppWindowBrowsers() {
+  const PF = process.env.ProgramFiles || 'C:\\Program Files'
+  const PF86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
+  const LAD = process.env.LOCALAPPDATA || ''
+  const cands = [
+    ['Edge', `${PF86}\\Microsoft\\Edge\\Application\\msedge.exe`],
+    ['Edge', `${PF}\\Microsoft\\Edge\\Application\\msedge.exe`],
+    ...(LAD ? [['Edge', `${LAD}\\Microsoft\\Edge\\Application\\msedge.exe`]] : []),
+    ['Chrome', `${PF}\\Google\\Chrome\\Application\\chrome.exe`],
+    ['Chrome', `${PF86}\\Google\\Chrome\\Application\\chrome.exe`],
+    ...(LAD ? [['Chrome', `${LAD}\\Google\\Chrome\\Application\\chrome.exe`]] : []),
   ]
-  const oneLine = (e) => String((e && e.message) || e).split(/[\r\n]/)[0]
-  const next = (i) => {
-    if (i >= attempts.length) {
-      console.log(`  ⚠ 没能自动打开浏览器。请手动访问：${url}`)
-      if (onDone) onDone()
-      return
-    }
-    const [name, cmd] = attempts[i]
+  const out = []
+  for (const [name, exe] of cands) {
     try {
-      exec(cmd, (err) => {
-        if (err) {
-          console.log(`  ℹ 自动打开浏览器（${name}）失败：${oneLine(err)}`)
-          next(i + 1)
-          return
-        }
-        console.log(`  ℹ 已用 ${name} 打开浏览器：${url}`)
-        if (onDone) onDone()
-      })
-    } catch (e) {
-      console.log(`  ℹ 自动打开浏览器（${name}）抛错：${oneLine(e)}`)
-      next(i + 1)
+      if (fs.existsSync(exe)) out.push({ name, exe })
+    } catch {
+      /* 忽略 */
     }
   }
-  next(0)
+  return out
+}
+
+/**
+ * **以"桌面应用窗口"打开本工具**（用户 2026-10-27 要求：不要浏览器标签页）。
+ *
+ * 做法：用系统自带的 Edge/Chrome 以 `--app=<url>` 启动 —— 得到的是
+ * **独立窗口：没有地址栏 / 标签页 / 书签栏**，标题与图标取自本页（`龙猫天堂` + 自备 favicon），
+ * 任务栏是独立的一项，观感与桌面程序一致。
+ *
+ * 为什么要给一个**独立的 `--user-data-dir`**：
+ *   · 与本机日常浏览的 Edge 互不干扰（不共享登录态/缓存）；
+ *   · 即使本机 Edge 已经开着，也能稳定拉起自己的窗口（同 profile 时参数可能被已有实例吞掉）；
+ *   · 本工具的会话（token/baseUrl）存在这里，**关掉再开仍在**。
+ *
+ * 兜底顺序：Edge app 窗口 → Chrome app 窗口 → 传统"默认浏览器打开新标签页"
+ * （任何一步失败都打印原因，最后一定给出可手动点的地址）。
+ *
+ * @param {string} url 要打开的地址（用 127.0.0.1，不用 localhost）
+ * @param {() => void} [onDone] 全部尝试结束后的回调（"已在运行"那条分支靠它退出进程）
+ */
+function openBrowser(url, onDone) {
+  const oneLine = (e) => String((e && e.message) || e).split(/[\r\n]/)[0]
+
+  // ① 优先：应用窗口（真正的"桌面端"观感）
+  const browsers = findAppWindowBrowsers()
+  const profileDir = path.join(
+    process.env.TOTORO_DATA_DIR || path.join(os.tmpdir(), 'totoro-heaven-data'),
+    'app-window-profile',
+  )
+  try {
+    fs.mkdirSync(profileDir, { recursive: true })
+  } catch {
+    /* 建不出来就用系统临时目录，Chromium 自己会建 */
+  }
+
+  const launchAppWindow = (i) => {
+    if (i >= browsers.length) {
+      fallbackTab(url, oneLine, onDone)
+      return
+    }
+    const b = browsers[i]
+    const args = [
+      `--app=${url}`,
+      '--window-size=1280,880',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-features=Translate',
+      `--user-data-dir=${profileDir}`,
+    ]
+    try {
+      const child = spawn(b.exe, args, { detached: true, stdio: 'ignore' })
+      child.on('error', (e) => {
+        console.log(`  ℹ 以应用窗口打开失败（${b.name}）：${oneLine(e)}`)
+        launchAppWindow(i + 1)
+      })
+      child.unref()
+      console.log(`  ℹ 已以应用窗口打开（${b.name}）：${url}`)
+      if (onDone) onDone()
+    } catch (e) {
+      console.log(`  ℹ 以应用窗口打开抛错（${b.name}）：${oneLine(e)}`)
+      launchAppWindow(i + 1)
+    }
+  }
+
+  // ② 兜底：老路径（默认浏览器开标签页），保留原有的三重尝试
+  const fallbackTab = (u, oneLineFn, done) => {
+    const attempts = [
+      ['start', `start ${u}`],
+      ['rundll32', `rundll32 url.dll,FileProtocolHandler ${u}`],
+      ['powershell', `powershell -NoProfile -Command Start-Process ${u}`],
+    ]
+    const next = (i) => {
+      if (i >= attempts.length) {
+        console.log(`  ⚠ 没能自动打开界面。请手动访问：${u}`)
+        if (done) done()
+        return
+      }
+      const [name, cmd] = attempts[i]
+      try {
+        exec(cmd, (err) => {
+          if (err) {
+            console.log(`  ℹ 自动打开界面（${name}）失败：${oneLineFn(err)}`)
+            next(i + 1)
+            return
+          }
+          console.log(`  ℹ 已用 ${name} 在浏览器中打开：${u}`)
+          if (done) done()
+        })
+      } catch (e) {
+        console.log(`  ℹ 自动打开界面（${name}）抛错：${oneLineFn(e)}`)
+        next(i + 1)
+      }
+    }
+    next(0)
+  }
+
+  launchAppWindow(0)
 }
 
 /**
