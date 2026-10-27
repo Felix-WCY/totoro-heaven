@@ -33,6 +33,16 @@ export const YTU_TARGET_KM_KEY = 'mp_ytu_target_km'
 export const YTU_LAPS_KEY = 'mp_ytu_laps'
 
 /**
+ * 🆕 2026-10-27：`mp_ytu_target_km` 的**归属任务 id**。
+ *
+ * 事故背景：覆盖值原先"按人记、不按任务记" —— 用户测完南航（3.20 km）再跑
+ * 辽宁科技大学（**1.5 km**）时，旧的 3.2 还在，把任务下发的里程盖掉，
+ * 表现为"里程 3.31 / 要求 1.5"，看着像软件没识别学校。
+ * 现在写入时记下 `taskId`，换任务时若归属不符就丢弃，回到任务里程。
+ */
+export const YTU_TARGET_KM_TASK_KEY = 'mp_ytu_target_km_task'
+
+/**
  * 把任意输入**归一化**成合法的研途健行目标里程（唯一入口）。
  *
  * 判据（可执行）：

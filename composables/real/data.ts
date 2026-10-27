@@ -13,6 +13,7 @@ import type { MpRunLine, MpSunrunTask } from '~/src/mp/types'
 import { groupRoutesByCampus } from '~/utils/mp/routeGroups'
 // 🆕 2026-10-07（用户要求）：服务端"今日该任务次数已达上限" ⇒ 真实提交入口标灰 + 就地说明
 import { dailyQuotaNotice, isQuotaMarkActive } from '~/utils/mp/dailyQuota'
+import { withSchoolDefaultMileage } from '~/utils/mp/schoolTaskProfile'
 // 🆕 2026-10-07（实测事故）：待补交轨迹的说明文案
 import { pendingDetailSummary } from '~/utils/mp/pendingDetail'
 // 🔴 2026-09-23（pre3）：任务号走兜底链（厂商响应可能只有 paperId/id，没有 taskId）
@@ -223,6 +224,20 @@ export function useMpRealData() {
   const applyToRunner = (overrideLineId?: string) => {
     if (!task.value) return
     disableDemo()
+    /**
+     * 🆕 2026-10-27（用户口径「南航那套系统自动设好、别的学校也要自动识别，不要手动调」）：
+     * 任务**没下发里程**时按学校补齐 —— 辽宁科技大学 **1.5 km**、南航 3.2 km。
+     * 任务给了值就以任务为准（学校改配置能自动跟随），学校档案表只是兜底。
+     * 见 `utils/mp/schoolTaskProfile.ts`。
+     */
+    const patched = withSchoolDefaultMileage(task.value, profile.value?.schoolCode ?? '')
+    if (patched !== task.value) {
+      task.value = patched
+      logInfo('real', '任务未下发里程，已按学校自动补齐', {
+        schoolCode: profile.value?.schoolCode,
+        mileage: (patched as { mileage?: unknown }).mileage,
+      })
+    }
     setTask(task.value)
     const list = (task.value?.runPointList ?? []) as MpRunLine[]
     if (!list.length) {

@@ -32,6 +32,7 @@ import { FREE_RUN_KM_DEFAULT, FREE_RUN_KM_KEY, clampFreeRunKm, parseStoredFreeRu
 import {
   YTU_LAPS_KEY,
   YTU_TARGET_KM_KEY,
+  YTU_TARGET_KM_TASK_KEY,
   clampYtuTargetKm,
   normalizeYtuLaps,
   parseStoredYtuLaps,
@@ -275,8 +276,28 @@ export function useDemoState(hooks: DemoStateHooks) {
     hooks.resetRecords()
   }
 
-  /** 注入真实任务（1.1.2 真实模式）：替换演示约束，跑步自检/轨迹生成都按真实值走 */
+  /**
+   * 注入真实任务（1.1.2 真实模式）：替换演示约束，跑步自检/轨迹生成都按真实值走。
+   *
+   * 🆕 2026-10-27（换学校实测）：**换任务必须清掉上一个任务遗留的"目标里程覆盖值"**。
+   *
+   * 事故背景：`ytuTargetKm` 原先"按人记、不按任务记"，用户测完南航（3.20 km）再去跑
+   * 辽宁科技大学（**1.5 km**）时，旧的 3.2 还在，会把任务下发的 1.5 盖掉 ——
+   * 表现为"里程达标 3.31 / 要求 1.5"，看着像软件没识别学校。
+   * 用户口径：「南航的系统帮忙设置好了不用手动调，别的学校也要自动识别」。
+   *
+   * 现在：覆盖值绑定写入时的 `taskId`；换任务时若归属不符 ⇒ 丢弃覆盖，回到任务里程。
+   */
   const setTask = (next: MpSunrunTask) => {
+    if (import.meta.client && ytuTargetKm.value !== null) {
+      let ownerTaskId = ''
+      try {
+        ownerTaskId = localStorage.getItem(YTU_TARGET_KM_TASK_KEY) ?? ''
+      } catch {
+        /* localStorage 被禁用：无法判断归属 ⇒ 保守丢弃，回到任务里程 */
+      }
+      if (ownerTaskId !== String(next.taskId ?? '')) setYtuTargetKm(null)
+    }
     task.value = next
   }
 
@@ -316,8 +337,15 @@ export function useDemoState(hooks: DemoStateHooks) {
     ytuTargetKm.value = km
     if (!import.meta.client) return km
     try {
-      if (km === null) localStorage.removeItem(YTU_TARGET_KM_KEY)
-      else localStorage.setItem(YTU_TARGET_KM_KEY, String(km))
+      if (km === null) {
+        localStorage.removeItem(YTU_TARGET_KM_KEY)
+        // 覆盖值失效 ⇒ 连归属一起清掉，避免下次换任务时误判
+        localStorage.removeItem(YTU_TARGET_KM_TASK_KEY)
+      } else {
+        localStorage.setItem(YTU_TARGET_KM_KEY, String(km))
+        // 🆕 2026-10-27：记下这个覆盖值属于**哪个任务**（换学校/换任务时据此丢弃）
+        localStorage.setItem(YTU_TARGET_KM_TASK_KEY, String(task.value?.taskId ?? ''))
+      }
     } catch {
       /* 配额满/隐私模式：内存里已生效，只是"下次开程序"记不住 —— 尽力而为，可静默 */
     }
