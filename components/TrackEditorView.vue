@@ -237,6 +237,10 @@ function centerOnSchoolNotSelectedLine() {
 
 /** 该校可选的场地（每条官方线路 = 一个操场）；点一下把地图移过去 */
 const mapSpots = computed(() => schoolMapSpots(activeLines.value as { pointName?: unknown; pointList?: LatLngLike[] }[]))
+/** 模板里"跳到某个操场"下拉的回调（模板中不能写带类型标注的箭头函数） */
+function onSpotPicked(payload: unknown) {
+  jumpToSpot(String(payload ?? ''))
+}
 function jumpToSpot(name: string) {
   const spot = mapSpots.value.find((s) => s.name === name)
   if (spot) center.value = { latitude: spot.center.latitude, longitude: spot.center.longitude }
@@ -905,7 +909,7 @@ const lineOptions = computed(() =>
               hide-details
               prepend-inner-icon="mdi-map-marker-radius"
               class="mb-2"
-              @update:model-value="(v: unknown) => jumpToSpot(String(v ?? ''))"
+              @update:model-value="onSpotPicked"
             >
               <template #no-data>
                 <span class="text-caption">本站暂无可跳转的场地</span>
