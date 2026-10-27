@@ -113,6 +113,11 @@ function openBrowser(url, onDone) {
       '--window-size=1280,880',
       '--no-first-run',
       '--no-default-browser-check',
+      // 🔴 2026-10-27：**必须绕过系统代理**。
+      // 本工具只连 127.0.0.1，但国内机器常开代理/加速器，Chromium 新实例会把
+      // localhost 也丢给代理 ⇒ 页面加载失败，表现为「窗口空白 + 浏览器默认图标」，
+      // 标题退化成 URL（用户看到的 `127.0.0.1_/`）。这不是页面坏了，是请求没到本机服务。
+      '--no-proxy-server',
       '--disable-features=Translate',
       `--user-data-dir=${profileDir}`,
     ]
