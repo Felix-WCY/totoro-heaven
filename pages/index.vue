@@ -24,14 +24,15 @@
       <template #prepend>
         <v-icon>mdi-shield-check-outline</v-icon>
       </template>
-      <div class="font-weight-bold">支持范围：厂商学校列表内的学校 + 无风控校验（运行时自动判定）</div>
+      <div class="font-weight-bold">支持范围：厂商学校列表内的学校 + 开场人脸未开启（运行时自动判定）</div>
       <div class="text-body-2">
         只要同时满足两点即可使用：<br />
         ① 学校在厂商<b>学校列表</b>内 —— 共享域（<code>wxxcx.xtotoro.com</code>）或各校
-        <b>独立租户域</b>（如辽宁科技大学 <code>yanggpa.ustl.edu.cn</code>）均可，程序会自动识别；<br />
-        ② 该校<b>未开启</b>开场人脸 / 随机抽查 / 摄像头杆校验 ——
-        任一开启时门禁会<b>在创建场次前阻止</b>，不会留下无效记录。<br />
+        <b>独立租户域</b>（如辽宁科技大学 <code>yanggpa.ustl.edu.cn</code>、江苏科技大学
+        <code>zhygp.just.edu.cn</code>）均可，程序会自动识别；<br />
+        ② 该校<b>未开启开场人脸</b> —— 开场人脸开启时门禁会<b>在创建场次前阻止</b>（网页无法实时拍脸）；<br />
         <span class="text-caption">
+          随机抽查 / 摄像头杆开启时<b>只提示、不拦截</b>（服务端若真的要求拍照/弹脸，记录可能作废，请自行判断风险）。
           当前 {{ verifiedSchoolText }}（我们实测验证过判分口径）；其他学校可以直接用，
           但判分口径未经验证 → 首次提交后请看「记录」页核对是否判为「有效」。
         </span>

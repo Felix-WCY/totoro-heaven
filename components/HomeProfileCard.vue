@@ -48,7 +48,7 @@
         />
         <v-list-item
           title="摄像头杆 getCameraConfig.flag"
-          :subtitle="cameraFlag === null ? '未读取' : cameraFlag ? '当前选中线路启用（需人到杆附近）' : '当前选中线路未启用'"
+          :subtitle="cameraFlag === null ? '未读取' : cameraFlag ? '当前选中线路启用（仅提示，不拦）' : '当前选中线路未启用'"
           prepend-icon="mdi-video-outline"
         />
       </v-list>
@@ -74,7 +74,7 @@
         </ol>
       </v-alert>
       <v-alert v-else type="success" variant="tonal" density="compact" class="mt-2">
-        ✅ 开跑前门禁通过：开场人脸未开启，随机抽查/摄像头杆无阻碍。
+        ✅ 开跑前门禁通过：开场人脸未开启，无硬性阻碍。
       </v-alert>
     </v-card-text>
   </v-card>

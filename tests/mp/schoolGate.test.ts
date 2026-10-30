@@ -78,10 +78,12 @@ test('夜间停用：门禁 blockedBy=night、放行时不受影响，且**不�
   const nightUnknown = evaluateRunGate(base({ switches: null, cameraFlag: null, now: new Date(2026, 8, 16, 23, 10, 0) }))
   assert.equal(nightUnknown.blockedBy, 'night')
 
-  // 白天时，原有否决项判定完全不变（回归）
+  // 白天时，原有否决项判定完全不变（回归；摄像头杆 2026-10-30 起改为软提示）
   assert.equal(evaluateRunGate(base({ switches: null })).blockedBy, 'switches_unknown')
   assert.equal(evaluateRunGate(base({ switches: { sunrunStartFace: '1', sunrunPointRandom: '0' } })).blockedBy, 'start_face')
-  assert.equal(evaluateRunGate(base({ cameraFlag: true })).blockedBy, 'camera_on')
+  const cameraOnly = evaluateRunGate(base({ cameraFlag: true }))
+  assert.equal(cameraOnly.allow, true)
+  assert.ok(cameraOnly.warningCodes.includes('camera_on'))
 })
 
 test('登记表：南航在表内且已验证判分口径', () => {
@@ -183,13 +185,61 @@ test('门禁：开场人脸**仍然硬拦**（与随机抽查无关；两项同�
   assert.ok(both.warningCodes.includes('point_random'), '软提示仍要一起展示')
 })
 
-test('门禁：摄像头杆开启 → 拒绝', () => {
+/**
+ * 🆕 2026-10-30（江苏科技大学真实诊断包）：摄像头杆开启 = **只提示、不拦截**。
+ * 依据：该校 4 条线路全部 `getCameraConfig.flag=true`，网页端无法到杆附近拍照；
+ * 若继续硬拦，整所学校都用不了（诊断包：blockedBy=camera_on，2 次都是门禁拦截）。
+ * ⚠️ 「摄像头杆开关未读/切了线路没重读」仍然是硬拦 —— 未知 ≠ 关闭。
+ */
+test('门禁：摄像头杆开启 → **只提示、不拦截**', () => {
   const r = evaluateRunGate(base({ cameraFlag: true }))
-  assert.equal(r.allow, false)
-  assert.equal(r.blockedBy, 'camera_on')
+  assert.equal(r.allow, true, 'cameraFlag=true 不得再直接阻止提交')
+  assert.equal(r.blockedBy, undefined, '没有硬命中项 ⇒ blockedBy 不填')
+  assert.ok(r.warningCodes.includes('camera_on'), '但必须留下一条 camera_on 提示')
+  assert.match(r.warnings.join('\n'), /摄像头杆/)
+  assert.match(r.warnings.join('\n'), /不再直接拦截/)
+  assert.match(r.warnings.join('\n'), /可能作废/)
 })
 
-test('门禁：摄像头 flag 未读取 → 拒绝（未知≠关闭）', () => {
+test('门禁：摄像头杆开启 + 随机抽查/开场人脸同时开 → 开场人脸仍硬拦，其余是软提示', () => {
+  const softs = evaluateRunGate(base({ cameraFlag: true, switches: { sunrunStartFace: '0', sunrunPointRandom: '1' } }))
+  assert.equal(softs.allow, true)
+  assert.ok(softs.warningCodes.includes('camera_on'))
+  assert.ok(softs.warningCodes.includes('point_random'))
+  const startFace = evaluateRunGate(base({ cameraFlag: true, switches: { sunrunStartFace: '1', sunrunPointRandom: '1' } }))
+  assert.equal(startFace.allow, false)
+  assert.equal(startFace.blockedBy, 'start_face')
+})
+
+/**
+ * 🆕 2026-10-30（江苏科技大学真实诊断包）：该校任务的实际输入必须放行。
+ * 诊断包事实：schoolCode=10289、baseUrl=zhygp.just.edu.cn、sunrunStartFace=0、
+ * sunrunPointRandom=1、当前线路 getCameraConfig.flag=true；旧逻辑 blockedBy=camera_on，
+ * 用户两次点开跑都被拦（submits.count=0）。
+ */
+test('门禁：江苏科技大学诊断包输入 ⇒ 放行，随机抽查/摄像头杆各一条提示', () => {
+  const r = evaluateRunGate({
+    schoolCode: '10289',
+    switches: {
+      sunrunPointShowOff: '0',
+      freeAppeal: '0',
+      noSunRunAppeal: '0',
+      sunrunStartFace: '0',
+      sunrunPointRandom: '1',
+    },
+    line: line('sunrunLine-20251122000001'),
+    cameraFlag: true,
+    cameraFlagLineId: 'sunrunLine-20251122000001',
+    now: new Date(2026, 9, 30, 13, 0, 0),
+  })
+  assert.equal(r.allow, true, '江苏科技大学这条任务必须能开跑（摄像头杆/随机抽查只提示）')
+  assert.equal(r.blockedBy, undefined)
+  assert.deepEqual(r.warningCodes, ['point_random', 'camera_on'], '两条提示按判定顺序给出')
+  assert.match(r.warnings.join('\n'), /随机人脸抽查/)
+  assert.match(r.warnings.join('\n'), /摄像头杆/)
+})
+
+test('门禁：摄像头杆 flag 未读取 → 拒绝（未知≠关闭）', () => {
   const r = evaluateRunGate(base({ cameraFlag: null }))
   assert.equal(r.allow, false)
   assert.equal(r.blockedBy, 'camera_unknown')
@@ -285,10 +335,10 @@ test('🔴 pre3 放宽：同一条输入在严格模式下 allow=false、放宽�
     { name: '夜间停用', input: { now: new Date(2026, 8, 16, 23, 0, 0) }, code: 'night' },
     { name: '开关未读', input: { switches: null }, code: 'switches_unknown' },
     { name: '开场人脸', input: { switches: { sunrunStartFace: '1', sunrunPointRandom: '0' } }, code: 'start_face' },
-    // ⚠️ 随机抽查（point_random）已改为"只提示不拦"（2026-10-27）⇒ 不在本表里
+    // ⚠️ 随机抽查（point_random）2026-10-27 起、摄像头杆开启（camera_on）2026-10-30 起
+    //    都改为"只提示不拦" ⇒ 不在本表里（本表只列"严格模式必须拦住"的项）
     { name: '未选线路', input: { line: null, cameraFlagLineId: '' }, code: 'camera_unknown' },
     { name: '摄像头杆未读', input: { cameraFlag: null }, code: 'camera_unknown' },
-    { name: '摄像头杆已开', input: { cameraFlag: true }, code: 'camera_on' },
     {
       name: '未选本机路径（服务端未下发线路 + 本机没有可用几何）',
       input: { line: null, cameraFlagLineId: '', lineRequired: false, localGeometryReady: false },

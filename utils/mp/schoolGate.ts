@@ -371,16 +371,25 @@ export function evaluateRunGate(input: RunGateInput): RunGateResult {
           '当前线路的「摄像头杆」开关尚未读取（切换线路后需重新读取）——为避免误提交，已停止。',
         )
       } else if (input.cameraFlag === true) {
-        hit(
+        /**
+         * 🆕 2026-10-30（江苏科技大学真实诊断包）：**摄像头杆也不再直接拦截**，只提示。
+         *
+         * 依据：江苏科技大学 `getCameraConfig.flag=true`，但用户在网页端根本没法到杆附近拍照；
+         * 若继续硬拦，整所学校（4 条线路全部带摄像头杆）都用不了。与随机抽查同一口径：
+         * 是否真的要求拍照/是否判无效由厂商决定，我们如实提示风险后放行。
+         * ⚠️ 「摄像头杆开关未读/线路切换后未重读」仍然硬拦（camera_unknown）—— 未知不等于关闭。
+         */
+        softWarn(
           'camera_on',
-          '当前线路启用了「摄像头杆过点校验（getCameraConfig.flag=true）」：需真人到杆附近拍摄，网页无法完成 —— 已停止，未创建场次。',
+          '当前线路启用了「摄像头杆过点校验」（getCameraConfig.flag=true）：网页无法在杆附近拍照，' +
+            '本次**不再直接拦截**。但若服务端要求杆附近拍照/运动中被判无效，这笔记录可能作废 —— 请知悉后再决定是否开跑。',
         )
       }
     }
   }
 
   /**
-   * ⚠️ `warnings` 里既有"真会拦"的命中项，也有**只提示**的软项（目前只有 `point_random`）。
+   * ⚠️ `warnings` 里既有"真会拦"的命中项，也有**只提示**的软项（`point_random` / `camera_on`）。
    * 严格模式 / 放宽模式都按同一口径返回；`allow` 只由 hits 决定。
    * 软项必须让界面看到（`warningCodes` 里也带上），否则就等于悄悄忽略。
    */

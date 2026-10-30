@@ -23,7 +23,7 @@ test('任务下发里程优先：任务给了就用任务的，不看学校档�
   assert.equal(r.schoolName, '')
 })
 
-test('任务未下发里程 → 按学校补齐（辽宁科技大学 1.5 / 南航 3.2）', () => {
+test('任务未下发里程 → 按学校补齐（辽宁科技大学 1.5 / 南航 3.2 / 江苏科技大学 1.2）', () => {
   for (const bad of [undefined, null, '', 0, '0', 'abc', NaN]) {
     const lk = resolveSchoolMileage({ taskMileage: bad, schoolCode: 'uosatln' })
     assert.equal(lk.km, 1.5, `辽宁科技大学对 ${String(bad)} 应回落 1.5`)
@@ -32,6 +32,11 @@ test('任务未下发里程 → 按学校补齐（辽宁科技大学 1.5 / 南�
     const nu = resolveSchoolMileage({ taskMileage: bad, schoolCode: '98765' })
     assert.equal(nu.km, 3.2, `南航对 ${String(bad)} 应回落 3.2`)
     assert.equal(nu.source, 'school')
+
+    const just = resolveSchoolMileage({ taskMileage: bad, schoolCode: '10289' })
+    assert.equal(just.km, 1.2, `江苏科技大学对 ${String(bad)} 应回落 1.2`)
+    assert.equal(just.source, 'school')
+    assert.equal(just.schoolName, '江苏科技大学')
   }
 })
 
@@ -68,7 +73,8 @@ test('档案表自身约束：学校码唯一、里程为正', () => {
     assert.ok(p.defaultMileageKm > 0, `${p.schoolName} 的默认里程必须为正`)
     assert.ok(p.note.length > 0, `${p.schoolName} 必须写明依据`)
   }
-  // 本次实测涉及的两所必须在表内
+  // 本次实测涉及的学校必须在表内
   assert.ok(codes.includes('98765'))
   assert.ok(codes.includes('uosatln'))
+  assert.ok(codes.includes('10289'))
 })

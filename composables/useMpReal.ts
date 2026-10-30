@@ -24,8 +24,8 @@ export type { MpRealProfile, RealPhase, RealSubmitResult } from './real/state'
 
 /**
  * 支持范围 = **条件式**（1.1.3，2026-09-15 用户确认）：
- *   ① 与南航共享同一个 API 域（`wxxcx.xtotoro.com`）；且
- *   ② 该校未开启开场人脸 / 随机抽查 / 摄像头杆校验（运行时由门禁判定）。
+ *   ① 与南航共享同一个 API 域（`wxxcx.xtotoro.com`）或已知独立租户域（如江苏 `zhygp.just.edu.cn`）；且
+ *   ② 该校未开启**开场人脸**（开启则硬拦；随机抽查/摄像头杆 2026-10 起只提示不拦，运行时由门禁判定）。
  * 学校是否"判分口径已被实测验证"只作**软提示**（`schoolNotice`），不影响放行。
  */
 

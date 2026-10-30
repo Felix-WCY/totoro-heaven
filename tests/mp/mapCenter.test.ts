@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  campusCenter,
   centerOfPoints,
   NEUTRAL_MAP_CENTER,
   parseManualLatLng,
@@ -90,6 +91,57 @@ test('schoolMapSpots：每条有坐标的线路给出一个场地中心；没坐
   assert.equal(spots.length, 2)
   assert.equal(spots[0]!.name, '主操场')
   assert.equal(spots[1]!.name, '第 3 条线路', '没有名字时用序号兜底')
+})
+
+/**
+ * 🆕 2026-10-30（江苏科技大学真实诊断包）：多校区任务不能把地图放在两个校区中间。
+ * 江苏：长山校区线路在 119.36/32.10，梦溪校区在 119.45/32.19（十几公里外），
+ * 旧逻辑 schoolCenter（全校包围盒）会落在二者之间的空地。
+ */
+test('campusCenter：优先当前校区（线路名含 campusName），不把地图放两校区中间', () => {
+  const longshan = (name: string) => ({
+    pointId: name,
+    pointName: `长山校区${name}`,
+    pointList: [
+      { latitude: '32.1080', longitude: '119.3600' },
+      { latitude: '32.1100', longitude: '119.3610' },
+    ],
+  })
+  const mengxi = {
+    pointId: 'mengxi',
+    pointName: '梦溪校区操场路线',
+    pointList: [
+      { latitude: '32.1900', longitude: '119.4500' },
+      { latitude: '32.1920', longitude: '119.4510' },
+    ],
+  }
+  const lines = [longshan('体育馆'), longshan('南门'), mengxi]
+  const c = campusCenter(lines, '长山校区', '')
+  assert.ok(c)
+  assert.ok(Math.abs(c!.latitude - 32.109) < 1e-6, '纬度必须是长山校区范围')
+  assert.ok(Math.abs(c!.longitude - 119.3605) < 1e-6, '经度必须是长山校区范围')
+})
+
+test('campusCenter：没有校区名时用选中线路；选中线路不属于本任务则退回全校中心', () => {
+  const lines = [
+    {
+      pointId: 'A',
+      pointName: '甲操场',
+      pointList: [{ latitude: 30, longitude: 120 }, { latitude: 30.01, longitude: 120.01 }],
+    },
+    {
+      pointId: 'B',
+      pointName: '乙操场',
+      pointList: [{ latitude: 31, longitude: 121 }, { latitude: 31.01, longitude: 121.01 }],
+    },
+  ]
+  const selected = campusCenter(lines, '', 'B')
+  assert.ok(selected)
+  assert.ok(Math.abs(selected!.latitude - 31.005) < 1e-9)
+  // 旧缓存里的线路 id 不在本任务线路里 ⇒ 不能用它定位（防止串到别的学校）
+  const stale = campusCenter(lines, '', 'OLD-SCHOOL-LINE')
+  assert.ok(stale)
+  assert.ok(Math.abs(stale!.latitude - 30.505) < 1e-9, '退回全校包围盒中心')
 })
 
 test('中性默认值保持"中国地理中心附近"，不能被学校/用户位置悄悄污染', () => {

@@ -112,6 +112,44 @@ export function schoolCenter(
 }
 
 /**
+ * 🆕 2026-10-30（江苏科技大学真实诊断包）：**多校区**任务的初始中心。
+ *
+ * 江苏「长山校区课外跑任务」同时下发 4 条线路：长山校区 2 条（119.36, 32.10 附近）、
+ * 梦溪校区 1 条（镇江市区，离长山十几公里），还有一条 `9999`。
+ * 若沿用「全校所有线路的包围盒中心」（`schoolCenter`），地图会落在两个校区中间的空地，
+ * 用户看到的又是「这卫星图不对 / 这不是我这地方」。
+ *
+ * 取值顺序：
+ *   ① **当前校区**的线路（线路名包含 `campusName`，如「长山校区体育馆操场路线」）；
+ *   ② 否则用当前选中线路（只有它确实属于本任务线路时才用，避免旧缓存串校）；
+ *   ③ 最后才退回全校所有线路的包围盒中心。
+ */
+export function campusCenter(
+  lines: readonly { pointId?: unknown; pointName?: unknown; pointList?: readonly LatLngInput[] }[] | null | undefined,
+  campusName?: string | null,
+  selectedLineId?: string | null,
+): LatLngLike | null {
+  const list = lines ?? []
+  const campus = String(campusName ?? '').trim()
+  if (campus) {
+    const campusPts: LatLngInput[] = []
+    for (const line of list) {
+      if (!String(line?.pointName ?? '').includes(campus)) continue
+      for (const p of line?.pointList ?? []) campusPts.push(p)
+    }
+    const byCampus = centerOfPoints(campusPts)
+    if (byCampus) return byCampus
+  }
+  const selectedId = String(selectedLineId ?? '').trim()
+  if (selectedId) {
+    const selected = list.find((line) => String(line?.pointId ?? '') === selectedId)
+    const bySelected = centerOfPoints(selected?.pointList)
+    if (bySelected) return bySelected
+  }
+  return schoolCenter(list)
+}
+
+/**
  * 手动解析用户粘贴的坐标（浏览器定位不可用时的兜底）。
  *
  * 支持：

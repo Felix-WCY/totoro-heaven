@@ -38,7 +38,7 @@ import {
 import { generateCorridorRoute } from '~/utils/mp/generateRoute'
 // 🆕 2026-09-22（真实用户实测）：从跑步页直达进来时 `?line=<pointId>` 要能**预选**这条线路
 import { lineIdFromQuery } from '~/utils/mp/routeGroups'
-import { NEUTRAL_MAP_CENTER, schoolCenter, schoolMapSpots, tryGeolocate, type LatLngLike } from '~/utils/mp/mapCenter'
+import { campusCenter, NEUTRAL_MAP_CENTER, schoolMapSpots, tryGeolocate, type LatLngLike } from '~/utils/mp/mapCenter'
 import type { LatLng } from '~/utils/mp/routeSimilarity'
 import type { MpRunLine } from '~/src/mp/types'
 // 🆕 2026-09-22（issue #12）：判"任务到底有没有下发线路"（纯函数，与跑步页/门禁同源）
@@ -221,11 +221,18 @@ function centerOnSchoolNotSelectedLine() {
     /**
      * 用户口径（2026-10-27）：**先按"学校"定位，不要按"已选线路"**；
      * 同一所学校的多个操场由用户在下面的地点选择器里挑。
-     * 所以这里用**该校全部官方线路**的包围盒中心，而不是当前选中那条。
+     *
+     * 🆕 2026-10-30（江苏科技大学）：任务可能**横跨多个校区**（长山 / 梦溪，相隔十几公里），
+     * 全校所有线路的包围盒中心会落在两个校区中间的空地上 ⇒ 先按**当前校区**（线路名含 campusName）
+     * 收窄，再用选中线路，最后才退回全校中心。判据与单测见 `campusCenter()`。
      */
-    const bySchool = schoolCenter(activeLines.value as { pointList?: LatLngLike[] }[])
-    if (bySchool) {
-      center.value = { latitude: bySchool.latitude, longitude: bySchool.longitude }
+    const byCampus = campusCenter(
+      activeLines.value as { pointId?: unknown; pointName?: unknown; pointList?: LatLngLike[] }[],
+      realProfile.value?.campusName,
+      lineId.value,
+    )
+    if (byCampus) {
+      center.value = { latitude: byCampus.latitude, longitude: byCampus.longitude }
       return
     }
     // 该校没有下发坐标（未下发线路的任务）⇒ 退到使用者当前位置

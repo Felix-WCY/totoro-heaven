@@ -47,6 +47,12 @@ export const SCHOOL_TASK_PROFILES: readonly SchoolTaskProfile[] = [
     defaultMileageKm: 1.5,
     note: '用户 2026-10-27 提供：单次 1.5 公里，每学期 70 次',
   },
+  {
+    schoolCode: '10289',
+    schoolName: '江苏科技大学',
+    defaultMileageKm: 1.2,
+    note: '2026-10-30 真实诊断包：长山校区课外跑任务下发 1.20km（本表仅作任务缺失时的兜底）',
+  },
 ]
 
 /** 里程的来源（用于界面/日志说明"这个数是谁定的"） */
