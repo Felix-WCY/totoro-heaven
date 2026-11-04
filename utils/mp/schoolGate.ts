@@ -366,9 +366,22 @@ export function evaluateRunGate(input: RunGateInput): RunGateResult {
     } else {
       const flagLineId = String(input.cameraFlagLineId ?? '')
       if (input.cameraFlag === null || input.cameraFlag === undefined || flagLineId !== lineId) {
-        hit(
+        /**
+         * 🆕 2026-11-04（辽宁科技大学真实诊断包）：**摄像头杆开关没读到也不再硬拦**，只提示。
+         *
+         * 现场：`getCameraConfig` 对 `yanggpa.ustl.edu.cn` 偶发 `fetch failed`（10.5s 超时），
+         * 门禁因此连续 9 次报 `camera_unknown` 把用户挡住；但用户已选好线路、本机轨迹也齐备，
+         * 且「摄像头杆开启」（`camera_on`）从 2026-10-30 起就只提示不拦 —— 再拿"没读到"硬拦
+         * 等于凭空制造一次停摆。
+         *
+         * 因此：**已选线路**时，flag 未读/切换后未重读 ⇒ 软提示（附带风险说明 + 界面常驻「重新读取」入口）；
+         * 仍硬拦的只剩「未选线路」（没有线路就没有场次可创建）。
+         * ⚠️ 未知 ≠ 关闭：提示必须如实说明"若实际启用，记录可能作废"。
+         */
+        softWarn(
           'camera_unknown',
-          '当前线路的「摄像头杆」开关尚未读取（切换线路后需重新读取）——为避免误提交，已停止。',
+          '当前线路的「摄像头杆」开关还没有读到（可能是读取超时/切换线路后没重读）：本次**不再直接拦截**。' +
+            '请点「重新读取该线路的开关」确认；若该线路实际启用了摄像头杆而网页无法拍照，这笔记录可能作废 —— 请知悉。',
         )
       } else if (input.cameraFlag === true) {
         /**
@@ -377,7 +390,8 @@ export function evaluateRunGate(input: RunGateInput): RunGateResult {
          * 依据：江苏科技大学 `getCameraConfig.flag=true`，但用户在网页端根本没法到杆附近拍照；
          * 若继续硬拦，整所学校（4 条线路全部带摄像头杆）都用不了。与随机抽查同一口径：
          * 是否真的要求拍照/是否判无效由厂商决定，我们如实提示风险后放行。
-         * ⚠️ 「摄像头杆开关未读/线路切换后未重读」仍然硬拦（camera_unknown）—— 未知不等于关闭。
+         * ⚠️ 「摄像头杆开关未读/线路切换后未重读」也按软提示处理（2026-11-04 辽宁诊断包），
+         * 但会在提示里要求用户点「重新读取」确认；真正未知的风险与 camera_on 相同。
          */
         softWarn(
           'camera_on',

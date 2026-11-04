@@ -442,13 +442,24 @@ export function useMpRealSubmit() {
       at: Date.now(),
     })
     const job = await pollServerSubmitJob(started.id)
+    /**
+     * 🆕 2026-11-04（辽宁科技大学诊断包）：用户在等待期点了「停止本次提交」。
+     * 服务端会清掉结果并进入 `aborted`；旧代码把它当 `failed`，界面显示
+     * 「上游业务失败（服务端作业没有返回结果）」—— 这不是上游失败，是用户主动放弃。
+     * 现在如实标成"已手动停止"，不再误导用户以为服务端坏了。
+     */
+    const aborted = job.phase === 'aborted'
     const outcome = (job.result?.scoreOutcome ?? 'failed') as WriteOutcome
     const scoreOk = Boolean(job.result?.scoreOk)
-    const scoreMessage = job.result?.scoreMessage ?? '服务端作业没有返回结果（请查看服务端终端与当天日志）'
+    const scoreMessage = aborted
+      ? '本次提交已被你手动停止（成绩没有发出；要重跑请重新开始一次跑步）'
+      : job.result?.scoreMessage ?? '服务端作业没有返回结果（请查看服务端终端与当天日志）'
     const submittedAtFinal = job.finishedAt || Date.now()
 
     // 过程清单：按服务端作业的结论打点（**超时 ≠ 失败**，未知态要说清"别急着重试"）
-    if (outcome === 'ok' || outcome === 'timeout-landed') {
+    if (aborted) {
+      pushProgress('warn', scoreMessage)
+    } else if (outcome === 'ok' || outcome === 'timeout-landed') {
       pushProgress('ok', outcome === 'ok' ? '④ 成绩已提交（服务端发出）' : SUBMIT_PROGRESS.scoreVerified())
     } else if (outcome === 'timeout-unknown') {
       pushProgress('warn', SUBMIT_PROGRESS.scoreUnknown())
@@ -472,6 +483,8 @@ export function useMpRealSubmit() {
       // 🆕 2026-09-21（冗余加固）：把四态结局透给界面 —— 别让它按 scoreOk 二分成"红/绿"
       scoreOutcome: outcome,
       scoreMessage,
+      /** 🆕 2026-11-04：本次是用户主动叫停（不是上游失败） */
+      ...(aborted ? { aborted: true } : {}),
       // 自由跑没有线路 ⇒ 路径点列本来就是空的（厂商口径），这里如实显示 0 点
       scoreRequestMasked: {
         ...buildScoreRequest(context, { runType }),
@@ -624,12 +637,21 @@ export function useMpRealSubmit() {
      * 绝不重发写请求 —— 这里把这件事**写进事件摘要**，让包里也能看到"没有自动重试"。
      */
     logEvent(
-      outcome === 'ok' || outcome === 'timeout-landed' ? 'info' : outcome === 'timeout-unknown' ? 'warn' : 'error',
+      aborted
+        ? 'warn'
+        : outcome === 'ok' || outcome === 'timeout-landed'
+          ? 'info'
+          : outcome === 'timeout-unknown'
+            ? 'warn'
+            : 'error',
       'submit',
-      `提交结果：${outcomeLabel(outcome)}${out.scoreMessage ? `（${out.scoreMessage}）` : ''}`,
+      aborted
+        ? '提交结果：已手动停止（未发送成绩）'
+        : `提交结果：${outcomeLabel(outcome)}${out.scoreMessage ? `（${out.scoreMessage}）` : ''}`,
       {
         scoreOutcome: outcome,
         scoreOk,
+        ...(aborted ? { aborted: true } : {}),
         scantronId,
         detailOk: out.detailOk ?? null,
         autoRetried: false,

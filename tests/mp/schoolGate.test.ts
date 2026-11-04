@@ -239,17 +239,27 @@ test('门禁：江苏科技大学诊断包输入 ⇒ 放行，随机抽查/摄�
   assert.match(r.warnings.join('\n'), /摄像头杆/)
 })
 
-test('门禁：摄像头杆 flag 未读取 → 拒绝（未知≠关闭）', () => {
+/**
+ * 🆕 2026-11-04（辽宁科技大学真实诊断包）：摄像头杆**读取失败**（cameraFlag 未读/切线路后旧值）
+ * 也不再硬拦 —— `getCameraConfig` 偶发 fetch failed 会导致整所学校停摆；改成软提示 + 常驻重读入口。
+ * 仍然硬拦的只剩「未选线路」（没有线路就没有场次可创建）。
+ */
+test('门禁：摄像头杆 flag 未读取（已选线路）→ 放行 + 提示，不再硬拦', () => {
   const r = evaluateRunGate(base({ cameraFlag: null }))
-  assert.equal(r.allow, false)
-  assert.equal(r.blockedBy, 'camera_unknown')
+  assert.equal(r.allow, true, '已选线路时读不到 flag 不得停摆')
+  assert.equal(r.blockedBy, undefined)
+  assert.ok(r.warningCodes.includes('camera_unknown'))
+  assert.match(r.warnings.join('\n'), /还没有读到/)
+  assert.match(r.warnings.join('\n'), /重新读取/)
+  assert.match(r.warnings.join('\n'), /可能作废/)
 })
 
-test('门禁：切了线路但 flag 还是旧线路的 → 拒绝（防误用旧值）', () => {
+test('门禁：切了线路但 flag 还是旧线路的 → 放行 + 提示（不再硬拦）', () => {
   const r = evaluateRunGate(base({ line: line('line-b'), cameraFlagLineId: 'line-a', cameraFlag: false }))
-  assert.equal(r.allow, false)
-  assert.equal(r.blockedBy, 'camera_unknown')
-  assert.match(r.reason, /切换线路后需重新读取/)
+  assert.equal(r.allow, true)
+  assert.equal(r.blockedBy, undefined)
+  assert.ok(r.warningCodes.includes('camera_unknown'))
+  assert.match(r.warnings.join('\n'), /还没有读到/)
 })
 
 test('门禁：未选线路 → 拒绝', () => {
@@ -335,10 +345,9 @@ test('🔴 pre3 放宽：同一条输入在严格模式下 allow=false、放宽�
     { name: '夜间停用', input: { now: new Date(2026, 8, 16, 23, 0, 0) }, code: 'night' },
     { name: '开关未读', input: { switches: null }, code: 'switches_unknown' },
     { name: '开场人脸', input: { switches: { sunrunStartFace: '1', sunrunPointRandom: '0' } }, code: 'start_face' },
-    // ⚠️ 随机抽查（point_random）2026-10-27 起、摄像头杆开启（camera_on）2026-10-30 起
-    //    都改为"只提示不拦" ⇒ 不在本表里（本表只列"严格模式必须拦住"的项）
+    // ⚠️ 随机抽查（point_random）2026-10-27 起、摄像头杆开启（camera_on）2026-10-30 起、
+    //    摄像头杆未读（camera_unknown，已选线路时）2026-11-04 起 都改为"只提示不拦" ⇒ 不在本表里
     { name: '未选线路', input: { line: null, cameraFlagLineId: '' }, code: 'camera_unknown' },
-    { name: '摄像头杆未读', input: { cameraFlag: null }, code: 'camera_unknown' },
     {
       name: '未选本机路径（服务端未下发线路 + 本机没有可用几何）',
       input: { line: null, cameraFlagLineId: '', lineRequired: false, localGeometryReady: false },

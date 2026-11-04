@@ -114,6 +114,10 @@
       >
         停止本次提交（还没发出成绩时有效）
       </v-btn>
+      <div v-if="submitInFlight" class="text-caption text-medium-emphasis mt-1">
+        真实提交需要等够与跑步相同的时长（页面会显示剩余秒数），<b>期间点「停止」= 放弃本次成绩</b>（不会发出）。
+        若只是等待时间长，请让它跑完；关掉本页/本程序也不会中断服务端作业。
+      </div>
     </v-alert>
 
     <!--
@@ -873,7 +877,7 @@
 
       <v-alert
         v-if="result"
-        :type="result.scoreOk ? 'success' : result.scoreOutcome === 'timeout-unknown' ? 'warning' : 'error'"
+        :type="result.scoreOk ? 'success' : result.aborted ? 'warning' : result.scoreOutcome === 'timeout-unknown' ? 'warning' : 'error'"
         variant="tonal"
         class="mt-2"
       >
@@ -882,13 +886,15 @@
           scantronId={{ result.scantronId }} ·
           <!-- ⚠️ 2026-09-21（冗余加固，审计 B3）：「结果未知」不能再写成"成绩未成功"（自相矛盾） -->
           轨迹：{{
-            result.detailOk === undefined
-              ? result.scoreOutcome === 'timeout-unknown'
-                ? '未提交（结果未知，稍后可点「查询判定」核实；核实到已入库时会自动补交）'
-                : '未提交（成绩未成功，按源码不发）'
-              : result.detailOk
-                ? '已提交'
-                : '失败：' + result.detailMessage
+            result.aborted
+              ? '未提交（本次被手动停止，没有发出成绩）'
+              : result.detailOk === undefined
+                ? result.scoreOutcome === 'timeout-unknown'
+                  ? '未提交（结果未知，稍后可点「查询判定」核实；核实到已入库时会自动补交）'
+                  : '未提交（成绩未成功，按源码不发）'
+                : result.detailOk
+                  ? '已提交'
+                  : '失败：' + result.detailMessage
           }}
         </div>
         <div v-if="result.verdictText" class="text-body-2 mt-1">★ 判定：{{ result.verdictText }}</div>

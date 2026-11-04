@@ -65,6 +65,8 @@ export interface RealSubmitResult {
    * "成绩未成功"，与文案自相矛盾（审计 B3）。
    */
   scoreOutcome?: 'ok' | 'timeout-landed' | 'timeout-unknown' | 'failed'
+  /** 🆕 2026-11-04：本次提交是用户主动叫停（不是上游业务失败） */
+  aborted?: boolean
 }
 
 export const TASK_CACHE_KEY = 'mp_real_task_v1'

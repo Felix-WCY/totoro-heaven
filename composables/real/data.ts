@@ -57,6 +57,11 @@ import { TASK_CACHE_KEY, useRealState } from './state'
  */
 const CAMERA_FLAG_TTL_MS = 30_000
 const CAMERA_FLAG_DEBOUNCE_MS = 80
+/**
+ * 🆕 2026-11-04（辽宁科技大学诊断包）：`getCameraConfig` 偶发 `fetch failed`（实测 10.5s 超时，
+ * 紧接着第二次 82ms 成功）。只读查询 ⇒ 失败自动重试 2 次，避免把"网络抖一下"变成整所学校被卡。
+ */
+const CAMERA_FLAG_RETRIES = 2
 /** 成功结果的短缓存（只缓存"拿到布尔 flag"的成功；key = lineId） */
 const cameraFlagCache = new Map<string, { flag: boolean | null; error: string; atMs: number }>()
 /** 在途请求（key = lineId）⇒ 并发调用复用同一个 Promise */
@@ -885,11 +890,26 @@ export function useMpRealData() {
     const inFlight = cameraFlagInFlight.get(id)
     if (inFlight) return inFlight
     const task = (async () => {
-      const cam = await MpApiWrapper.call<Record<string, unknown>>(
+      let cam = await MpApiWrapper.call<Record<string, unknown>>(
         'cameraConfig',
         { lineId: id, token },
         { token, baseUrl: session.value?.baseUrl },
       )
+      // 2026-11-04：只读查询，网络抖动自动重试（最多 2 次），避免 camera_unknown 误拦
+      for (let attempt = 1; !cam.ok && attempt <= CAMERA_FLAG_RETRIES; attempt++) {
+        const retryToken = session.value?.token
+        if (!retryToken) break
+        logWarn('gate', `摄像头杆开关读取失败，${attempt}/${CAMERA_FLAG_RETRIES} 次重试`, {
+          lineId: id,
+          message: cam.message,
+        })
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt))
+        cam = await MpApiWrapper.call<Record<string, unknown>>(
+          'cameraConfig',
+          { lineId: id, token: retryToken },
+          { token: retryToken, baseUrl: session.value?.baseUrl },
+        )
+      }
       if (!cam.ok) {
         // 失败：保持"未知"（门禁继续拦），但**不记 lineId、不进缓存**，以便下次重试
         cameraFlag.value = null
