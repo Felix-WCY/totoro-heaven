@@ -146,7 +146,15 @@ export default defineEventHandler(async (event) => {
         statusMessage: `上游 ${UPSTREAM_TIMEOUT_MS / 1000} 秒无响应（网络/校方接口慢或不通）——请稍后重试`,
       })
     }
-    throw err
+    /**
+     * 🆕 2026-11-04（辽宁科技大学诊断包）：`fetch failed`（连接超时/网络重置）原先直接 `throw err`
+     * ⇒ Nitro 对外只回 "internal server error"，用户/诊断包里看不出是"校园网/校方接口连不上"，
+     * 还会被误当成程序故障。这里统一翻译成可读原因（statusMessage 会被 MpApiWrapper 透出）。
+     */
+    throw createError({
+      statusCode: 502,
+      statusMessage: `无法连接校方接口（${new URL(base).hostname}）：网络异常或校方服务无响应，请稍后重试`,
+    })
   }
 
   let parsed: unknown = undefined

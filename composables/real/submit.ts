@@ -273,6 +273,23 @@ export function useMpRealSubmit() {
     }
     pushProgress('ok', SUBMIT_PROGRESS.gatePassed())
 
+    /**
+     * 🆕 2026-11-04（辽宁科技大学诊断包）：**先检查"上次没跑完的提交"再创建新会话**。
+     *
+     * 旧顺序是 `getRunBegin`（已在服务端建场次）→ 启动服务端作业 → 才发现有 `suspended` 作业被拒，
+     * 于是留下一个**孤儿场次**；用户再点提交又被服务端回 "请勿重复开始,等待10秒后重试!"，
+     * 现场看起来就是"突然用不了了"。
+     * 现在：有挂起作业时直接指路「继续提交 / 作废」，本次不创建场次。
+     */
+    if (suspendedJob.value) {
+      phase.value = 'error'
+      phaseMessage.value =
+        '还有一笔上次没跑完的提交：请先在页面上点「继续提交」或「作废」，再开始新的提交（本次没有创建新场次）。'
+      pushProgress('warn', '检测到上次未完成的提交作业：已停止本次新提交，请先继续/作废它')
+      logWarn('submit', '有挂起的提交作业，拒绝创建新场次', { jobId: suspendedJob.value.id })
+      return null
+    }
+
     const options = { token, baseUrl: session.value?.baseUrl }
 
     // ① 开跑：getRunBegin（写）。自由跑传 runType=1 且 paperId/lineId 为空串（按实测行为确认）；
@@ -293,6 +310,12 @@ export function useMpRealSubmit() {
        * 判据：**"服务器明确说没开通"这类回复要单独翻译成人话**，别让用户以为是自己的操作或本程序的 bug。
        */
       const noFreeRunTask = freeRun && isFreeRunUnsupportedMessage(begin.message)
+      /**
+       * 🆕 2026-11-04（辽宁科技大学诊断包）：`getRunBegin` 成功建过场次后，10 秒内再点提交，
+       * 服务端会回 `请勿重复开始,等待10秒后重试!`。旧界面只显示"开跑失败：…"，用户会连点，
+       * 反而触发更多网络失败。这里单独翻译成"等 10 秒再点一次"（不自动重试写操作）。
+       */
+      const repeatStart = /请勿重复开始/.test(begin.message)
       // 🆕 2026-09-21（E）：记住"该校未开通自由跑"，下次开跑前就把真实提交入口标灰（可手动清除再试）
       if (noFreeRunTask) markFreeRunUnsupported()
       /**
@@ -307,12 +330,15 @@ export function useMpRealSubmit() {
       // 若失败原因是 token 过期 → 给"退出登录并重新登录小程序"的可操作提示
       phaseMessage.value = looksLikeTokenExpired(begin.raw)
         ? TOKEN_EXPIRED_HINT
-        : quotaReached
-          ? dailyQuotaNotice(begin.message)
-          : noFreeRunTask
-            ? `你所在学校/账号暂无「自由跑任务」——厂商服务端拒绝开跑（原话：${begin.message}）。` +
-              `自由跑目前只能用于本地模拟与预览，真实提交需要学校开通；阳光跑不受影响。`
-            : `开跑失败：${begin.message}`
+        : repeatStart
+          ? '校方提示「请勿重复开始」：上一笔场次还没释放 —— 请等 10 秒后再点一次提交（本次没有创建新场次）。'
+          : quotaReached
+            ? dailyQuotaNotice(begin.message)
+            : noFreeRunTask
+              ? `你所在学校/账号暂无「自由跑任务」——厂商服务端拒绝开跑（原话：${begin.message}）。` +
+                `自由跑目前只能用于本地模拟与预览，真实提交需要学校开通；阳光跑不受影响。`
+              : `开跑失败：${begin.message}`
+      if (repeatStart) pushProgress('warn', '校方要求等 10 秒（上一笔场次未释放）——请稍后再点一次提交，不要连点')
       if (noFreeRunTask) {
         pushProgress(
           'warn',
@@ -326,6 +352,7 @@ export function useMpRealSubmit() {
         lineId: input.line?.pointId ?? (freeRun ? '(自由跑)' : '(本任务未下发线路)'),
         paperId,
         ...(noFreeRunTask ? { note: '服务端未开通自由跑任务（2026-09-21 实测）' } : {}),
+        ...(repeatStart ? { note: '服务端要求等 10 秒（上一笔场次未释放）' } : {}),
         ...(quotaReached ? { note: '服务端说今日该任务次数已达上限（每日配额，非本机问题；2026-10-07 实测）' } : {}),
       })
       return null
