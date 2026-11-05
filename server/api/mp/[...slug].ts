@@ -41,6 +41,41 @@ import { fingerprintOf } from '../../utils/tokenScanState'
  */
 const UPSTREAM_TIMEOUT_MS = 40_000
 
+/**
+ * 🆕 2026-11-05（辽宁科技大学诊断包）：**只在连接阶段失败时重试一次**。
+ *
+ * 现场：等待 9 分 31 秒后，`sunRunExercises` 与 `getSunrunArch` 各在 10.49s 报 `fetch failed`
+ * （undici 默认 connectTimeout = 10s），紧接着对同一域名的 `getTermList` 50ms 成功
+ * ⇒ 不是校方接口挂了，而是**空闲后第一条 TCP 连接没建起来**（校园网/NAT/网卡休眠都会这样）。
+ *
+ * 安全边界：
+ *   · 只有 **connect 阶段**失败（UND_ERR_CONNECT_TIMEOUT / ENOTFOUND / ECONNREFUSED / ENETUNREACH…）
+ *     才重试 —— 此时请求**根本没发出去**，重试不会造成重复写；
+ *   · 已经连上但响应阶段失败（ECONNRESET / UND_ERR_SOCKET 等）**绝不重试**（可能已经写成功）。
+ */
+const UPSTREAM_CONNECT_RETRIES = 1
+const RETRYABLE_CONNECT_CODES = new Set([
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ETIMEDOUT',
+])
+
+function upstreamErrorCode(err: unknown): string {
+  const cause = (err as { cause?: { code?: unknown } } | undefined)?.cause
+  return String(cause?.code ?? '')
+}
+
+/** 连接阶段失败（请求未发出）⇒ 可安全重试；响应阶段失败 ⇒ 不可重试 */
+function isRetryableConnectFailure(err: unknown): boolean {
+  return RETRYABLE_CONNECT_CODES.has(upstreamErrorCode(err))
+}
+
+const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
 /** 解析请求体文本（坏 JSON / 空 ⇒ undefined）——「全记录」要从它取"已知敏感原值"的对照表 */
 const safeParseJson = (text: string | undefined): unknown => {
   if (!text) return undefined
@@ -113,24 +148,45 @@ export default defineEventHandler(async (event) => {
   const authFp = tokenRaw && tokenRaw !== 'null' ? fingerprintOf(tokenRaw) : '(无 token)'
   const startedAt = Date.now()
 
-  let res: Response
-  let text: string
-  try {
-    /**
-     * ⚠️ **必须带超时**（2026-09-19 自查补上）：这是**主数据通道**（读任务/成绩/记录全走这里），
-     * 而它原先**没有超时** —— 上游 TCP 卡住时 `fetch` 会一直挂着，界面表现为**无限转圈**
-     * （用户只能强杀程序）。其余 4 处上游调用早就带了 15–20 秒超时，这里是漏网的一处。
-     * 判据：**任何出网请求都要有上限**；超时后给出可读原因，而不是抛一个看不懂的裸 AbortError。
-     *
-     * ⚠️ **2026-09-21 调整 20s → 40s（修 issue #11 的一部分）**：这个上限**必须大于**
-     * 客户端写操作超时（`src/wrappers/MpApiWrapper.ts` 的 `MP_WRITE_TIMEOUT_MS = 30s`），
-     * 否则代理先放弃、客户端永远走不到"超时→核实是否已入库"那条路径（实测厂商 `sunRunExercises`
-     * 正常就能跑 15.4 秒，20 秒的上限余量太薄）。这里放宽到 40 秒作为**最后兜底**，
-     * 让"等待上限"由离用户最近的那一层（客户端）决定、语义单一。
-     */
-    res = await fetch(target, { method, headers, body, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) })
-    text = await res.text()
-  } catch (err) {
+  let res: Response | null = null
+  let text = ''
+  let lastErr: unknown
+  for (let attempt = 0; attempt <= UPSTREAM_CONNECT_RETRIES; attempt++) {
+    try {
+      /**
+       * ⚠️ **必须带超时**（2026-09-19 自查补上）：这是**主数据通道**（读任务/成绩/记录全走这里），
+       * 而它原先**没有超时** —— 上游 TCP 卡住时 `fetch` 会一直挂着，界面表现为**无限转圈**
+       * （用户只能强杀程序）。其余 4 处上游调用早就带了 15–20 秒超时，这里是漏网的一处。
+       * 判据：**任何出网请求都要有上限**；超时后给出可读原因，而不是抛一个看不懂的裸 AbortError。
+       *
+       * ⚠️ **2026-09-21 调整 20s → 40s（修 issue #11 的一部分）**：这个上限**必须大于**
+       * 客户端写操作超时（`src/wrappers/MpApiWrapper.ts` 的 `MP_WRITE_TIMEOUT_MS = 30s`），
+       * 否则代理先放弃、客户端永远走不到"超时→核实是否已入库"那条路径（实测厂商 `sunRunExercises`
+       * 正常就能跑 15.4 秒，20 秒的上限余量太薄）。这里放宽到 40 秒作为**最后兜底**，
+       * 让"等待上限"由离用户最近的那一层（客户端）决定、语义单一。
+       */
+      res = await fetch(target, { method, headers, body, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) })
+      text = await res.text()
+      lastErr = undefined
+      break
+    } catch (err) {
+      lastErr = err
+      /**
+       * 🆕 2026-11-05：连接阶段失败（请求未发出）才自动重试一次；响应阶段失败绝不重试。
+       * 现场见上方 `UPSTREAM_CONNECT_RETRIES` 注释（空闲 9.5 分钟后第一条 TCP 连接超时）。
+       */
+      const retryable = attempt < UPSTREAM_CONNECT_RETRIES && isRetryableConnectFailure(err)
+      if (!retryable) break
+      logWarn('proxy', `${method} ${suffix} 连接失败，重试 ${attempt + 1}/${UPSTREAM_CONNECT_RETRIES}`, {
+        upstream: new URL(base).hostname,
+        code: upstreamErrorCode(err),
+        ms: Date.now() - startedAt,
+      })
+      await sleepMs(300)
+    }
+  }
+  if (!res) {
+    const err = lastErr
     const isTimeout = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
     logError('proxy', `${method} ${suffix} 请求失败`, {
       upstream: new URL(base).hostname,
@@ -138,6 +194,7 @@ export default defineEventHandler(async (event) => {
       auth: authFp,
       body: summarizeRequestBody(suffix, body),
       error: err instanceof Error ? err.message : String(err),
+      code: upstreamErrorCode(err),
       ...(isTimeout ? { timeoutMs: UPSTREAM_TIMEOUT_MS } : {}),
     })
     if (isTimeout) {
