@@ -300,12 +300,23 @@ export function useDemoRunner(state: DemoStateApi, recordsApi: DemoRecordsApi) {
        * `2` = 生成器默认的圆角轮数（老条目的既有行为，逐字不变）。
        */
       const smoothRouteForThisRun = geometrySource === 'local' && resolved && !resolved.smooth ? 0 : 2
+      /**
+       * 🆕 2026-11-07（第二次实测：按官方点位生成、覆盖最差 3m，仍判「点位不达标」）：
+       * 对**真实提交 + 官方点列**再收紧到"严格贴线"：
+       *   · 不做 Chaikin 圆角（圆角会削角，最远可偏 ~3m）；
+       *   · 关掉 GPS 漂移期；
+       *   · 抖动压到 0.15m、最大离线路 0.5m。
+       * 目标：让每个官方点位到轨迹的距离 ≤1m，排除"点位判据比 3m 还严"的可能。
+       * （演示/本机几何仍保留原来的真实感参数。）
+       */
+      const strictOfficial = isRealLine && geometrySource === 'official'
       const generated = generateCorridorRoute(geometry, {
         targetKm: plan.targetKm,
         stepM: isRealLine ? REAL_STEP_M : DEMO_STEP_M,
-        drift: true,
+        drift: !strictOfficial,
         seed: newRunSeed(),
-        smoothRoute: smoothRouteForThisRun,
+        smoothRoute: strictOfficial ? 0 : smoothRouteForThisRun,
+        ...(strictOfficial ? { jitterSigmaM: 0.05, maxOffRouteM: 0.2 } : {}),
       })
       /**
        * 诊断用：官方每个点位到生成轨迹的最近距离（最差那个）—— 若服务端仍判「点位不达标」，
@@ -323,9 +334,10 @@ export function useDemoRunner(state: DemoStateApi, recordsApi: DemoRecordsApi) {
         }
         logInfo('run', '点位覆盖检查（真实提交按官方点位生成）', {
           source: geometrySource,
+          strictOfficial,
           officialPoints: officialPts.length,
           generatedPoints: generated.points.length,
-          worstDistanceM: Math.round(worst),
+          worstDistanceM: Number(worst.toFixed(1)),
         })
       }
       const actualKm = Number(generated.km)
