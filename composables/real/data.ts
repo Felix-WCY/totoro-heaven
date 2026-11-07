@@ -89,6 +89,48 @@ function queueCameraFlag(id: string, force: boolean): void {
 }
 
 /**
+ * 🆕 2026-11-07：**点位规则只读探测**（用户明确要求不再拿账号试提交）。
+ *
+ * 只发读请求、绝不创建场次/不交成绩；结果只写本机日志，供导出诊断包后分析。
+ * 这几个端点分别对应：
+ *   · runPointList               —— 任务点位/计数（是否要求逐点打卡）
+ *   · runPointListAbnormal       —— 异常点位类型
+ *   · checkisshoujidaka          —— 是否开启「手机打卡」
+ *   · sunRunRandomConfiguration  —— 随机点位距离阈值（start/check/offset）
+ *
+ * 失败也只是一条 warn，不抛错、不影响任务加载。
+ */
+async function probeRunPointRules(lineId: string, token: string, baseUrl?: string): Promise<void> {
+  const probes = [
+    { key: 'runPointList', label: '点位列表' },
+    { key: 'runPointListAbnormal', label: '异常点位' },
+    { key: 'checkisshoujidaka', label: '手机打卡' },
+    { key: 'sunRunRandomConfiguration', label: '随机点位阈值' },
+  ] as const
+  for (const p of probes) {
+    try {
+      const res = await MpApiWrapper.call(
+        p.key as never,
+        { lineId, token },
+        { token, baseUrl },
+      )
+      logInfo('gate', `点位规则只读探测：${p.label}`, {
+        endpoint: p.key,
+        ok: res.ok,
+        kind: res.kind,
+        message: res.message,
+        data: res.data,
+      })
+    } catch (err) {
+      logWarn('gate', `点位规则只读探测失败：${p.label}`, {
+        endpoint: p.key,
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+}
+
+/**
  * 在**所有学校域名**上依次尝试拉学生档案，命中即返回。
  *
  * 🔴 为什么不能只走共享域（2026-10-26 实测）：
@@ -470,6 +512,17 @@ export function useMpRealData() {
 
     const selectedId = String(run.value.lineId || (task.value.runPointList ?? [])[0]?.pointId || '')
     if (selectedId) await refreshCameraFlag(selectedId, true)
+    /**
+     * 🆕 2026-11-07（用户明确要求：不要再拿账号试提交）：
+     * 只做**只读探测**，把校方“点位”规则一次问清楚 —— 不创建场次、不交成绩。
+     * 仅在 `sunrunPointRandom=1` 的学校触发（辽宁当前命中），避免给其他学校多发请求。
+     *
+     * 目的：`scorePassRemark=点位不达标` 已连续出现，但不知道服务端到底按什么判；
+     * 这些接口分别可能返回：点位列表 / 异常点位 / 是否开启手机打卡 / 随机点位距离阈值。
+     */
+    if (selectedId && String(switches.value?.sunrunPointRandom ?? '') === '1') {
+      void probeRunPointRules(selectedId, token, session.value?.baseUrl)
+    }
 
     /**
      * 🆕 2026-09-22（用户原话："你刚刚说刷新后就丢了，我们直接丢之前记录下来不行吗"）：
