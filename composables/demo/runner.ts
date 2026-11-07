@@ -10,13 +10,14 @@
  * `demo/records.ts` 的返回值传入；依赖方向：本文件 → {`./state`, `./records`}（单向，**不反向**）。
  * ⚠️ 传进来的 ref 与 `useState` 拿到的是同一个对象，所以 `run.value = ...` 这类赋值照旧对全局生效。
  */
-import { computeFitDegree } from '~/utils/mp/routeSimilarity'
+import { computeFitDegree, distanceMeters } from '~/utils/mp/routeSimilarity'
 import type { LatLng } from '~/utils/mp/routeSimilarity'
 import { generateCorridorRoute } from '~/utils/mp/generateRoute'
 import { applyStartToLoop, laneLoop, laneRatioFor } from '~/utils/mp/trackEditor'
 import { buildRunStats, buildTimeFields } from '~/utils/mp/runData'
 import { buildScoreDetailRequest, buildScoreRequest } from '~/utils/mp/submitPayload'
 import { evaluateRunAgainstTask, type TaskCheckResult } from '~/utils/mp/taskRules'
+import { logInfo } from '../useEventLog'
 // 🆕 2026-09-22（issue #12）：判"任务到底有没有下发线路"（纯函数，与门禁/自检/诊断同源）
 import { routeRequirementOf, taskPaperIdOf } from '~/utils/mp/taskShape'
 // 🆕 2026-09-22「非官方路径绘制」：本机条目带 freeShape 时，几何用它展开（纯模块，与跑道编辑页预览同源）
@@ -277,18 +278,28 @@ export function useDemoRunner(state: DemoStateApi, recordsApi: DemoRecordsApi) {
       //       都用 `run.lineId` 从"本机描过的线路"里挑几何。原先这里写着"自由跑没有线路 ⇒ 直接用官方模板"，
       //       那句在 2026-09-18 收紧"只允许描过的跑道"之后就已经不成立了，容易误导，故删除。
       const trackEntry = line ? lib.get(line.pointId) : undefined
-      let geometry: LatLng[] = line?.pointList ?? []
+      const officialPts = (line?.pointList ?? []) as LatLng[]
+      let geometry: LatLng[] = officialPts
       /**
-       * ⭐ 2026-09-22「非官方路径绘制」：几何统一走 `resolveTrackGeometry` ——
-       *   有 `freeShape` 的条目用它展开（**并关掉圆角**）；老条目（双圈）逐字保持原行为。
+       * 🆕 2026-11-07（辽宁科技大学真实判定「点位不达标」）：
+       * **真实提交优先按官方线路点位生成轨迹**，不再用本机描的跑道几何当主路径。
+       *
+       * 原因：10/27 同一套本机几何还能判有效；11/07 服务端改严后，`scorePassRemark='点位不达标'`。
+       * 本机跑道是"车道线"（有内外圈/偏移），服务端点位校验只要偏出它的判据就判无效；
+       * 官方点列则是服务端自己的模板 —— 按它生成能保证起点/各点位都在服务端认得的位置上。
+       * 演示模式仍用本机几何（为了看绘制效果），真实模式有官方点列时一律用官方点列。
        */
+      let geometrySource: 'official' | 'local' = 'official'
       const resolved = trackEntry ? resolveTrackGeometry(trackEntry) : null
-      if (resolved && resolved.geometry.length >= 2) geometry = resolved.geometry
+      if (!(isRealLine && officialPts.length >= 2) && resolved && resolved.geometry.length >= 2) {
+        geometry = resolved.geometry
+        geometrySource = 'local'
+      }
       /**
        * 非官方路径不做圆角（圆角会把直线折返的几何毁掉，见 `resolveTrackGeometry` 的注释）；
        * `2` = 生成器默认的圆角轮数（老条目的既有行为，逐字不变）。
        */
-      const smoothRouteForThisRun = resolved ? (resolved.smooth ? 2 : 0) : 2
+      const smoothRouteForThisRun = geometrySource === 'local' && resolved && !resolved.smooth ? 0 : 2
       const generated = generateCorridorRoute(geometry, {
         targetKm: plan.targetKm,
         stepM: isRealLine ? REAL_STEP_M : DEMO_STEP_M,
@@ -296,6 +307,27 @@ export function useDemoRunner(state: DemoStateApi, recordsApi: DemoRecordsApi) {
         seed: newRunSeed(),
         smoothRoute: smoothRouteForThisRun,
       })
+      /**
+       * 诊断用：官方每个点位到生成轨迹的最近距离（最差那个）—— 若服务端仍判「点位不达标」，
+       * 这个数能直接说明是生成轨迹的问题还是服务端判据另有要求。
+       */
+      if (isRealLine && officialPts.length >= 2) {
+        let worst = 0
+        for (const p of officialPts) {
+          let best = Number.POSITIVE_INFINITY
+          for (const q of generated.points) {
+            const d = distanceMeters(Number(p.latitude), Number(p.longitude), Number(q.latitude), Number(q.longitude))
+            if (d < best) best = d
+          }
+          if (Number.isFinite(best) && best > worst) worst = best
+        }
+        logInfo('run', '点位覆盖检查（真实提交按官方点位生成）', {
+          source: geometrySource,
+          officialPoints: officialPts.length,
+          generatedPoints: generated.points.length,
+          worstDistanceM: Math.round(worst),
+        })
+      }
       const actualKm = Number(generated.km)
       run.value = {
         ...createRunState(),
