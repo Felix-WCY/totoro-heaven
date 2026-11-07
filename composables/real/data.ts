@@ -128,6 +128,54 @@ async function probeRunPointRules(lineId: string, token: string, baseUrl?: strin
       })
     }
   }
+
+  /**
+   * 再查**最近一次真实提交**的点位结果（只读）：`getRunPointList` 要 scantronId，
+   * 从本机成绩记录里取最新一条（没有就是空，不猜）。
+   * 这能直接告诉我们服务端认为哪个点位没达标，而不是继续提交试。
+   */
+  const lastScantron = latestScantronIdFromRecords()
+  if (lastScantron) {
+    try {
+      const res = await MpApiWrapper.call(
+        'runPointList' as never,
+        { scantronId: lastScantron, lineId, token },
+        { token, baseUrl },
+      )
+      logInfo('gate', '点位规则只读探测：最近一次提交的点位结果', {
+        endpoint: 'runPointList(scantronId)',
+        scantronId: lastScantron,
+        ok: res.ok,
+        kind: res.kind,
+        message: res.message,
+        data: res.data,
+      })
+    } catch (err) {
+      logWarn('gate', '点位规则只读探测：最近一次提交的点位结果失败', {
+        scantronId: lastScantron,
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+}
+
+/** 从本机成绩记录里取最近一条带 scantronId 的（只读；不写任何状态） */
+function latestScantronIdFromRecords(): string {
+  if (typeof localStorage === 'undefined') return ''
+  try {
+    const raw = localStorage.getItem('mp_demo_records')
+    if (!raw) return ''
+    const list = JSON.parse(raw) as unknown
+    if (!Array.isArray(list)) return ''
+    for (let i = list.length - 1; i >= 0; i--) {
+      const rec = list[i] as { scantronId?: unknown } | null
+      const id = String(rec?.scantronId ?? '').trim()
+      if (id) return id
+    }
+  } catch {
+    /* ignore */
+  }
+  return ''
 }
 
 /**
