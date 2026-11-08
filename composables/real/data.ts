@@ -35,6 +35,7 @@ import {
   isKnownSchoolDomain,
   nonSharedDomainMessage,
   unverifiedSchoolNotice,
+  unsupportedSchoolReason,
 } from '~/utils/mp/schoolGate'
 import { logError, logInfo, logWarn } from '../useEventLog'
 import { TASK_CACHE_KEY, useRealState } from './state'
@@ -472,6 +473,18 @@ export function useMpRealData() {
       campus: profile.value.campusName,
       baseUrl,
     })
+
+    /**
+     * 🆕 2026-11-08：**已下架学校**（辽宁科技大学）在读取任务之前就明确拒绝。
+     * 这样用户不会读到任务、不会开跑、更不会浪费次数；南航等学校不受影响。
+     */
+    const unsupported = unsupportedSchoolReason(schoolCode)
+    if (unsupported) {
+      status.value = 'error'
+      error.value = unsupported
+      logWarn('real', '学校已下架，拒绝读取任务', { schoolCode, school: profile.value.schoolName })
+      return false
+    }
 
     // ③ 任务与线路（campusId 是必填，否则必报「该校区阳光跑任务未设置」）
     const paper = await MpApiWrapper.getSunrunPaper(

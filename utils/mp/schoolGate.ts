@@ -11,6 +11,28 @@ export const LINE_NOT_REQUIRED_REASON = '本任务未下发线路（不指定路
 /** 共享域 host（支持范围判据①：与南航同一个 API 域） */
 export const SHARED_DOMAIN_HOST = 'wxxcx.xtotoro.com'
 
+/**
+ * 🆕 2026-11-08：**已下架的学校**（用户决定）。
+ *
+ * 辽宁科技大学校方自 2026-11-01 起收紧阳光跑「点位/随机抽查」校验：
+ * 即使按官方点位生成轨迹（最大偏差 0.6m、拟合度 1.00、里程/配速/时长合格、提交与轨迹都成功），
+ * 校方仍判 `点位不达标`。该规则不是网页工具能完成的，继续尝试只会留无效记录/触发风控，
+ * 因此从本工具下架。
+ *
+ * ⚠️ 只按 **schoolCode** 精确拦；南航 `98765` 与江苏 `10289` 等不受影响。
+ */
+export const UNSUPPORTED_SCHOOLS: Readonly<Record<string, string>> = {
+  uosatln:
+    '辽宁科技大学已暂停支持：该校阳光跑新增「点位/随机抽查」校验，网页工具无法完成；' +
+    '为避免产生无效记录与账号风控，请本人使用学校指定小程序完成。',
+}
+
+/** 取已下架学校的说明；未下架返回空串 */
+export function unsupportedSchoolReason(schoolCode: string | null | undefined): string {
+  const code = String(schoolCode ?? '').trim()
+  return code ? (UNSUPPORTED_SCHOOLS[code] ?? '') : ''
+}
+
 /** 判断某个基址是否属于共享域（支持范围判据①） */
 export function isSharedDomain(baseUrl: string | null | undefined): boolean {
   const raw = String(baseUrl ?? '').trim()
@@ -202,6 +224,8 @@ export type RunGateBlockCode =
   | 'camera_unknown'
   /** 🆕 pre3：服务端未下发线路，而**本机一条可用几何都没有**（严格模式下会拦住） */
   | 'no_local_geometry'
+  /** 🆕 2026-11-08：学校已下架（如辽宁科技大学） */
+  | 'unsupported_school'
 
 /**
  * 🔴 **门禁"放宽"总开关**（历史：pre3「采集数据专用」；**2026-09-25 已关闸 ⇒ `false`**）
@@ -311,6 +335,22 @@ export function evaluateRunGate(input: RunGateInput): RunGateResult {
   const softWarn = (code: RunGateBlockCode, reason: string) => soft.push({ code, reason })
   /** "不拦、但要说一句"的信息（如自由路线任务"无需选择线路"）——与 warnings 分开：它不是"本该拦住"的理由 */
   let info = ''
+
+  /**
+   * 🆕 2026-11-08：已下架学校**无条件硬拦**（不受 `relaxGate`、夜间/开关状态影响）。
+   * 这是产品级下架，不是"放宽采集"能绕过的；南航/江苏等不在名单内，走原逻辑。
+   */
+  const unsupported = unsupportedSchoolReason(input.schoolCode)
+  if (unsupported) {
+    return {
+      allow: false,
+      reason: unsupported,
+      blockedBy: 'unsupported_school',
+      warnings: [unsupported],
+      warningCodes: ['unsupported_school'],
+      relaxed: false,
+    }
+  }
 
   // ⓪ 夜间停用（最先判：到点就谁也别跑，避免留下深夜记录）
   const now = input.now ?? new Date()

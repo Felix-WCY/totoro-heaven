@@ -28,8 +28,8 @@
       <div class="text-body-2">
         只要同时满足两点即可使用：<br />
         ① 学校在厂商<b>学校列表</b>内 —— 共享域（<code>wxxcx.xtotoro.com</code>）或各校
-        <b>独立租户域</b>（如辽宁科技大学 <code>yanggpa.ustl.edu.cn</code>、江苏科技大学
-        <code>zhygp.just.edu.cn</code>）均可，程序会自动识别；<br />
+        <b>独立租户域</b>（如江苏科技大学 <code>zhygp.just.edu.cn</code>）均可，程序会自动识别；
+        <b>已下架学校</b>（当前：辽宁科技大学）会在读取时直接提示暂停支持，不会创建场次；<br />
         ② 该校<b>未开启开场人脸</b> —— 开场人脸开启时门禁会<b>在创建场次前阻止</b>（网页无法实时拍脸）；<br />
         <span class="text-caption">
           随机抽查 / 摄像头杆开启时<b>只提示、不拦截</b>（服务端若真的要求拍照/弹脸，记录可能作废，请自行判断风险）。

@@ -47,6 +47,16 @@ const base = (overrides: Partial<RunGateInput> = {}): RunGateInput => ({
   ...overrides,
 })
 
+test('门禁：辽宁科技大学已下架 → 硬拦并说明原因（南航不受影响）', () => {
+  const lk = evaluateRunGate(base({ schoolCode: 'uosatln' }))
+  assert.equal(lk.allow, false)
+  assert.equal(lk.blockedBy, 'unsupported_school')
+  assert.match(lk.reason, /辽宁科技大学.*暂停支持/)
+  // 南航 / 江苏仍正常放行
+  assert.equal(evaluateRunGate(base({ schoolCode: '98765' })).allow, true)
+  assert.equal(evaluateRunGate(base({ schoolCode: '10289' })).allow, true)
+})
+
 // ---------- 夜间停用时段（用户 2026-09-16 要求） ----------
 
 test('夜间停用：22:30 起、次日 06:00 前一律拦住（含边界）', () => {
