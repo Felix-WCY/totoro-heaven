@@ -67,6 +67,26 @@
         <span v-if="windowStartedText">本次窗口：{{ windowStartedText }} 开始。</span>
       </div>
 
+      <!-- 🆕 2026-11-08：只读查询某次提交的点位结果（不建场次、不交成绩） -->
+      <v-divider class="my-3" />
+      <div class="text-body-2 font-weight-bold mb-1">只读查询某次提交的点位结果</div>
+      <div class="d-flex flex-wrap align-center ga-2">
+        <v-text-field
+          v-model="probeScantronId"
+          density="compact"
+          hide-details
+          placeholder="场次号，如 sunrunId20261108338"
+          style="max-width: 320px"
+        />
+        <v-btn size="small" variant="tonal" color="primary" :loading="probeLoading" @click="probeRunPoints">
+          查询点位结果（只读）
+        </v-btn>
+      </div>
+      <div class="text-caption text-medium-emphasis mt-1">
+        只调校方查询接口，不会创建场次、不会提交成绩；结果同时写进本次诊断日志。
+      </div>
+      <pre v-if="probeResult" class="text-caption mt-2" style="white-space: pre-wrap; max-height: 260px; overflow: auto">{{ probeResult }}</pre>
+
       <!-- 只结束、先不导出（用户可能想先停下、过会儿再导）——走同一个 stop 接口，窗口仍保留在服务端 -->
       <div v-if="isRecording" class="mb-3">
         <v-btn size="small" variant="tonal" color="primary" :disabled="exporting || stopping" :loading="stopping" @click="stopOnly">
@@ -185,7 +205,7 @@ import { TASK_CACHE_KEY, useRealState } from '~/composables/real/state'
 // 🆕 2026-09-22（issue #12）：任务形状一行摘要（"下发了线路没有 / 下发了拟合度阈值没有"）进诊断包
 import { taskShapeLine } from '~/utils/mp/taskShape'
 // 共享域常量（会话里没写 baseUrl 时的兜底展示值）
-import { MP_DEFAULT_BASE_URL } from '~/src/wrappers/MpApiWrapper'
+import { MP_DEFAULT_BASE_URL, MpApiWrapper } from '~/src/wrappers/MpApiWrapper'
 // 路线库的键名/归一化都在纯逻辑层（不自己再声明一份键名）
 import { TRACK_LIBRARY_KEY, normalizeLibrary } from '~/utils/mp/trackLibrary'
 import type { TrackRouteEntry } from '~/utils/mp/trackLibrary'
@@ -216,6 +236,49 @@ const demo = useMpDemo()
 const demoActive = demo.demoMode
 const realData = useMpReal()
 const gate = realData.gateStatus
+
+/**
+ * 🆕 2026-11-08：只读查询「某次提交的点位结果」。
+ * 只调校方的 getRunPointList 查询接口；不创建场次、不提交成绩。
+ * 用于判断「点位不达标」到底是哪一项点位没达标。
+ */
+const probeScantronId = ref('')
+const probeLoading = ref(false)
+const probeResult = ref('')
+async function probeRunPoints() {
+  const token = mpSession.token.value
+  if (!token) {
+    showSnackbar('请先在「工作台」读取真实账号与任务（需要 token）', 'warning')
+    return
+  }
+  const scantronId = probeScantronId.value.trim()
+  if (!scantronId) {
+    showSnackbar('请先填场次号（如 sunrunId20261108338）', 'warning')
+    return
+  }
+  probeLoading.value = true
+  probeResult.value = ''
+  try {
+    const res = await MpApiWrapper.call(
+      'runPointList' as never,
+      { scantronId, token },
+      { token, baseUrl: mpSession.session.value?.baseUrl },
+    )
+    probeResult.value = JSON.stringify(res.data ?? res, null, 2)
+    logs.log(res.ok ? 'info' : 'warn', 'gate', '点位结果只读查询（手动）', {
+      scantronId,
+      ok: res.ok,
+      message: res.message,
+      data: res.data,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    probeResult.value = `查询失败：${message}`
+    logs.log('error', 'gate', '点位结果只读查询失败（手动）', { scantronId, message })
+  } finally {
+    probeLoading.value = false
+  }
+}
 
 /** 操作说明（**按顺序、可照做**；用户明确要求把它写清楚） */
 const STEPS = [

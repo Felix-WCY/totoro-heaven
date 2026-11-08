@@ -168,8 +168,9 @@ function latestScantronIdFromRecords(): string {
     const list = JSON.parse(raw) as unknown
     if (!Array.isArray(list)) return ''
     for (let i = list.length - 1; i >= 0; i--) {
-      const rec = list[i] as { scantronId?: unknown } | null
-      const id = String(rec?.scantronId ?? '').trim()
+      const rec = list[i] as { scantronId?: unknown; scoreId?: unknown } | null
+      // ⚠️ 本机记录里的服务端场次号字段是 `scoreId`（不是 `scantronId`）
+      const id = String(rec?.scantronId ?? rec?.scoreId ?? '').trim()
       if (id) return id
     }
   } catch {
@@ -561,11 +562,9 @@ export function useMpRealData() {
     const selectedId = String(run.value.lineId || (task.value.runPointList ?? [])[0]?.pointId || '')
     if (selectedId) await refreshCameraFlag(selectedId, true)
 
-    /**
-     * ⚠️ 2026-11-07 晚：只读探测已完成使命（已拿到点位阈值 start/check/offset 与官方点位），
-     * **不再随每次读取任务自动发这 4 个请求** —— 用户反馈可能触发校方频率限制/IP 风控，
-     * 排查阶段也不能再给学校后端增加无谓请求。需要复用时手动调用 `probeRunPointRules()`。
-     */
+    // ⚠️ 2026-11-07 晚：只读探测已完成使命（已拿到点位阈值 start/check/offset 与官方点位）。
+    // 自动探测会随每次读任务多发 5 个请求，可能增加校方频控风险 ⇒ **默认不自动调用**；
+    // 需要查某次提交的点位结果时，用「数据 → 诊断」里的「只读查询点位结果」按钮手动查。
     // if (selectedId && String(switches.value?.sunrunPointRandom ?? '') === '1') {
     //   void probeRunPointRules(selectedId, token, session.value?.baseUrl)
     // }
